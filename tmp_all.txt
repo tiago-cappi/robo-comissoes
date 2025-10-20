@@ -1,4 +1,4 @@
-Ôªøimport pandas as pd
+import pandas as pd
 import numpy as np
 import os
 from datetime import datetime
@@ -12,7 +12,7 @@ try:
 except Exception:
     requests = None
 
-# Tenta importar a biblioteca para PDF. Se n√£o existir, o script funcionar√° sem gerar o PDF.
+# Tenta importar a biblioteca para PDF. Se n„o existir, o script funcionar· sem gerar o PDF.
 try:
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -22,26 +22,26 @@ try:
 except ImportError:
     REPORTLAB_DISPONIVEL = False
 
-# --- CONFIGURA√á√ïES E CONSTANTES ---
-# Nomes dos arquivos de entrada (ajuste se necess√°rio)
+# --- CONFIGURA«’ES E CONSTANTES ---
+# Nomes dos arquivos de entrada (ajuste se necess·rio)
 ARQUIVO_REGRAS_XLSX = "Regras_Comissoes.xlsx"
 ARQUIVO_FATURADOS = "Faturados Setembro 2025.xlsx"
-ARQUIVO_CONVERSOES = "Convers√µes Setembro 2025.xlsx"
+ARQUIVO_CONVERSOES = "Conversıes Setembro 2025.xlsx"
 ARQUIVO_RENTABILIDADE = "Rentabilidade_Realizada_Setembro_2025.xlsx"
 ARQUIVO_RETENCAO = "Retencao_Clientes.xlsx"
 ARQUIVO_FATURADOS_YTD = "Faturados_YTD_Setembro_2025.xlsx"
 ARQUIVO_RECEBIMENTOS = "Recebimentos_do_Mes.xlsx"
 ARQUIVO_STATUS_PAGAMENTOS = "Status_Pagamentos_Processos.xlsx"
 ARQUIVO_ESTADO = "Estado_Processos_Recebimento.xlsx"
-# FOR√áAR DEBUG TEMPORARIAMENTE (ser√° desativado ap√≥s a execu√ß√£o)
+# FOR«AR DEBUG TEMPORARIAMENTE (ser· desativado apÛs a execuÁ„o)
 FORCE_DEBUG_TERMINAL = False
 
-# Nome do arquivo de sa√≠da
+# Nome do arquivo de saÌda
 NOME_ARQUIVO_SAIDA = "Comissoes_Calculadas_{}.xlsx".format(datetime.now().strftime('%Y%m%d_%H%M%S'))
 
 class CalculoComissao:
     """
-    Classe principal para orquestrar o c√°lculo de comiss√µes.
+    Classe principal para orquestrar o c·lculo de comissıes.
     """
     def __init__(self):
         self.data = {}
@@ -50,17 +50,17 @@ class CalculoComissao:
         self.legacy_token = '__legacy__'
         self.cache_regras = {}
         self.auditoria_fc = []
-        # Cache para taxas de c√¢mbio: chave (ano, mes_final, tuple(moedas)) -> dict
+        # Cache para taxas de c‚mbio: chave (ano, mes_final, tuple(moedas)) -> dict
         self.cache_cambio = {}
-        # Coleta de depura√ß√£o para metas de fornecedores
+        # Coleta de depuraÁ„o para metas de fornecedores
         self.debug_fornecedores = []
-        # Decis√µes e marca√ß√µes de cross-selling por Processo
+        # Decisıes e marcaÁıes de cross-selling por Processo
         self.cross_selling_decisions = {}
 
     def _log_validacao(self, nivel, mensagem, contexto={}):
-        """Adiciona uma entrada ao log de valida√ß√£o."""
+        """Adiciona uma entrada ao log de validaÁ„o."""
         self.validation_log.append({
-            "N√≠vel": nivel,
+            "NÌvel": nivel,
             "Mensagem": mensagem,
             "Contexto": str(contexto)
         })
@@ -70,7 +70,7 @@ class CalculoComissao:
         try:
             regras_data = pd.read_excel(ARQUIVO_REGRAS_XLSX, sheet_name=None)
             self.data.update(regras_data)
-            # FATURADOS e CONVERSOES podem n√£o existir para o m√™s ‚Äî carregar defensivamente
+            # FATURADOS e CONVERSOES podem n„o existir para o mÍs ó carregar defensivamente
             try:
                 self.data['FATURADOS'] = pd.read_excel(ARQUIVO_FATURADOS)
             except Exception:
@@ -78,37 +78,37 @@ class CalculoComissao:
             try:
                 self.data['CONVERSOES'] = pd.read_excel(ARQUIVO_CONVERSOES)
             except Exception:
-                # Se n√£o houver Convers√µes geradas para o m√™s, manter DataFrame vazio
+                # Se n„o houver Conversıes geradas para o mÍs, manter DataFrame vazio
                 self.data['CONVERSOES'] = pd.DataFrame()
             self.data['RENTABILIDADE_REALIZADA'] = pd.read_excel(ARQUIVO_RENTABILIDADE)
-            # Novo arquivo com dados de reten√ß√£o de clientes por linha
+            # Novo arquivo com dados de retenÁ„o de clientes por linha
             try:
                 self.data['RETENCAO_CLIENTES'] = pd.read_excel(ARQUIVO_RETENCAO)
             except FileNotFoundError:
-                # Se o arquivo n√£o existir, deixamos a chave com DataFrame vazio
+                # Se o arquivo n„o existir, deixamos a chave com DataFrame vazio
                 self.data['RETENCAO_CLIENTES'] = pd.DataFrame(columns=['linha', 'clientes_mes_anterior', 'clientes_mes_atual'])
 
             # Carrega o faturamento YTD (contendo coluna 'Fabricante' e datas completas)
             try:
-                self.data['FATURADOS_YTD'] = pd.read_excel(ARQUIVO_FATURADOS_YTD, parse_dates=['Dt Emiss√£o'])
+                self.data['FATURADOS_YTD'] = pd.read_excel(ARQUIVO_FATURADOS_YTD, parse_dates=['Dt Emiss„o'])
             except FileNotFoundError:
-                self.data['FATURADOS_YTD'] = pd.DataFrame(columns=['Dt Emiss√£o', 'Fabricante', 'Valor Realizado'])
+                self.data['FATURADOS_YTD'] = pd.DataFrame(columns=['Dt Emiss„o', 'Fabricante', 'Valor Realizado'])
 
             # Nova aba com metas por fornecedor
             if 'METAS_FORNECEDORES' in self.data:
                 self.data['METAS_FORNECEDORES'] = self.data['METAS_FORNECEDORES']
             else:
-                # Se n√£o existir a aba, criamos estrutura vazia para n√£o quebrar o fluxo
+                # Se n„o existir a aba, criamos estrutura vazia para n„o quebrar o fluxo
                 self.data['METAS_FORNECEDORES'] = pd.DataFrame(columns=['linha', 'fornecedor', 'meta_anual', 'moeda'])
 
             # Nova aba CROSS_SELLING (opcional): colaborador (Consultor Externo) e taxa_cross_selling_pct
             try:
                 self.data['CROSS_SELLING'] = pd.read_excel(ARQUIVO_REGRAS_XLSX, sheet_name='CROSS_SELLING')
             except Exception:
-                # se n√£o existir, manter DataFrame vazio com colunas esperadas
+                # se n„o existir, manter DataFrame vazio com colunas esperadas
                 self.data['CROSS_SELLING'] = pd.DataFrame(columns=['colaborador', 'taxa_cross_selling_pct'])
 
-            # Normaliza√ß√£o segura de colunas/strings (evita .str em valores n√£o-string)
+            # NormalizaÁ„o segura de colunas/strings (evita .str em valores n„o-string)
             for df_name, df_any in list(self.data.items()):
                 try:
                     if not isinstance(df_any, pd.DataFrame):
@@ -128,15 +128,15 @@ class CalculoComissao:
                 except Exception as _e_norm:
                     self._log_validacao('AVISO', f'Falha ao normalizar strings para {df_name}: {_e_norm}', {})
 
-            # Carregar recebimentos do m√™s (opcional)
+            # Carregar recebimentos do mÍs (opcional)
             try:
                 self.data['RECEBIMENTOS'] = pd.read_excel(ARQUIVO_RECEBIMENTOS)
             except Exception:
                 self.data['RECEBIMENTOS'] = pd.DataFrame(columns=['PROCESSO', 'DATA_RECEBIMENTO', 'VALOR_RECEBIDO', 'ID_CLIENTE'])
 
-            # Carregar arquivo de an√°lise comercial completo (hist√≥rico de processos)
+            # Carregar arquivo de an·lise comercial completo (histÛrico de processos)
             try:
-                # suportar .xlsx, .xls ou .csv (usu√°rio informou que tem .csv)
+                # suportar .xlsx, .xls ou .csv (usu·rio informou que tem .csv)
                 analise_candidates = [
                     'Analise_Comercial_Completa.xlsx',
                     'Analise_Comercial_Completa.xls',
@@ -149,23 +149,23 @@ class CalculoComissao:
                         break
 
                 if analise_path is None:
-                    # manter DataFrame vazio ‚Äî mais adiante a gera√ß√£o de COMISSOES_RECEBIMENTO
-                    # exige explicitamente este arquivo; registramos para valida√ß√£o
+                    # manter DataFrame vazio ó mais adiante a geraÁ„o de COMISSOES_RECEBIMENTO
+                    # exige explicitamente este arquivo; registramos para validaÁ„o
                     self.data['ANALISE_COMERCIAL_COMPLETA'] = pd.DataFrame()
                     self._log_validacao('AVISO', 'ANALISE_COMERCIAL_COMPLETA ausente (procurados .xlsx/.xls/.csv).', {'candidates': analise_candidates})
                 else:
-                    # ler CSV ou Excel conforme a extens√£o
+                    # ler CSV ou Excel conforme a extens„o
                     try:
                         if analise_path.lower().endswith('.csv'):
                             # tentar detectar delimitador automaticamente
                             df_anal = pd.read_csv(analise_path, sep=None, engine='python', dtype=str)
                         else:
-                            # Excel: inferir se existe coluna 'Dt Emiss√£o' para parse_dates
+                            # Excel: inferir se existe coluna 'Dt Emiss„o' para parse_dates
                             try:
                                 hdrs = pd.read_excel(analise_path, nrows=0).columns.tolist()
                             except Exception:
                                 hdrs = []
-                            parse_dates = ['Dt Emiss√£o'] if 'Dt Emiss√£o' in hdrs else False
+                            parse_dates = ['Dt Emiss„o'] if 'Dt Emiss„o' in hdrs else False
                             df_anal = pd.read_excel(analise_path, parse_dates=parse_dates, dtype=str)
                     except Exception as e_read:
                         self._log_validacao('AVISO', f'Falha ao ler {analise_path}: {e_read}', {'path': analise_path})
@@ -199,12 +199,12 @@ class CalculoComissao:
 
             params_df = self.data['PARAMS']
             self.params = pd.Series(params_df.valor.values, index=params_df.chave).to_dict()
-            # par√¢metro para escolha default em execu√ß√µes n√£o interativas
+            # par‚metro para escolha default em execuÁıes n„o interativas
             self.params['cross_selling_default_option'] = str(self.params.get('cross_selling_default_option', 'A')).upper()
             self.legacy_token = self.params.get('legacy_scope_token', '__legacy__')
-            # Configurar logger para depura√ß√£o no terminal se solicitado
+            # Configurar logger para depuraÁ„o no terminal se solicitado
             debug_terminal = str(self.params.get('debug_terminal_fornecedores', False)).lower() in ('1', 'true', 'yes')
-            # For√ßar DEBUG em execu√ß√£o tempor√°ria se solicitado pelo desenvolvedor
+            # ForÁar DEBUG em execuÁ„o tempor·ria se solicitado pelo desenvolvedor
             debug_terminal = debug_terminal or FORCE_DEBUG_TERMINAL
             self._logger = logging.getLogger('calculo_comissoes')
             handler = logging.StreamHandler(sys.stdout)
@@ -215,10 +215,10 @@ class CalculoComissao:
             self._logger.propagate = False
             self._logger.setLevel(logging.DEBUG if debug_terminal else logging.INFO)
         except Exception as e:
-            # Erro cr√≠tico ao carregar dados iniciais; registrar mas continuar (dados poder√£o estar incompletos)
+            # Erro crÌtico ao carregar dados iniciais; registrar mas continuar (dados poder„o estar incompletos)
             self._log_validacao('ERRO', f'Falha ao carregar dados iniciais: {e}', {})
 
-        # Determinar quem recebe por recebimento (colaboradores cujo tipo de comiss√£o √© 'Recebimento' ou cargo marcado)
+        # Determinar quem recebe por recebimento (colaboradores cujo tipo de comiss„o È 'Recebimento' ou cargo marcado)
         try:
             recebe_set = set()
             # Prefer explicit coluna TIPO_COMISSAO na aba CARGOS ou COLABORADORES
@@ -240,27 +240,27 @@ class CalculoComissao:
                     self._logger.info(f"Colaboradores detectados para recebimento (via TIPO_COMISSAO): {colabs_receb2}")
                 recebe_set.update(colabs_receb2)
 
-            # fallback heur√≠stico: cargos com nome contendo 'Receb' ou 'Recebimento'
+            # fallback heurÌstico: cargos com nome contendo 'Receb' ou 'Recebimento'
             if not recebe_set and 'CARGOS' in self.data and 'nome_cargo' in self.data['CARGOS'].columns:
                 heur = self.data['CARGOS'][self.data['CARGOS']['nome_cargo'].astype(str).str.contains('receb', case=False, na=False)]['nome_cargo'].tolist()
                 if getattr(self, '_logger', None):
-                    self._logger.info(f"CARGOS detectados por heur√≠stica (nome cont√©m 'receb'): {heur}")
+                    self._logger.info(f"CARGOS detectados por heurÌstica (nome contÈm 'receb'): {heur}")
                 if heur and 'COLABORADORES' in self.data:
                     colabs_heur = self.data['COLABORADORES'][self.data['COLABORADORES']['cargo'].isin(heur)]['nome_colaborador'].dropna().astype(str).str.strip().tolist()
                     if getattr(self, '_logger', None):
-                        self._logger.info(f"Colaboradores detectados por heur√≠stica: {colabs_heur}")
+                        self._logger.info(f"Colaboradores detectados por heurÌstica: {colabs_heur}")
                     recebe_set.update(colabs_heur)
 
             self.recebe_por_recebimento = set(recebe_set)
             if getattr(self, '_logger', None):
                 self._logger.info(f"Set final de colaboradores que recebem por recebimento: {self.recebe_por_recebimento}")
         except FileNotFoundError as e:
-            raise Exception(f"Erro: Arquivo n√£o encontrado: {e.filename}.")
+            raise Exception(f"Erro: Arquivo n„o encontrado: {e.filename}.")
         except Exception:
             self.recebe_por_recebimento = set()
 
     def _validar_dados(self):
-        """Executa valida√ß√µes b√°sicas nos dados carregados."""
+        """Executa validaÁıes b·sicas nos dados carregados."""
         # Atualizado para incluir 'retencao_clientes' e metas de fornecedor quando presentes
         peso_cols = ['faturamento_linha', 'rentabilidade', 'conversao_linha', 'faturamento_individual', 'conversao_individual']
         if 'retencao_clientes' in self.data['PESOS_METAS'].columns:
@@ -273,28 +273,28 @@ class CalculoComissao:
         pesos_por_cargo = self.data['PESOS_METAS'].groupby('cargo')[peso_cols].sum().sum(axis=1)
         for cargo, soma in pesos_por_cargo.items():
             if not np.isclose(soma, 100) and not np.isclose(soma, 0):
-                self._log_validacao('AVISO', f"A soma dos pesos para o cargo '{cargo}' n√£o √© 100% (soma: {soma}).", {"cargo": cargo})
+                self._log_validacao('AVISO', f"A soma dos pesos para o cargo '{cargo}' n„o È 100% (soma: {soma}).", {"cargo": cargo})
         
         colabs_regras = set(self.data['COLABORADORES']['nome_colaborador'])
         colabs_atribuicoes = set(self.data['ATRIBUICOES']['colaborador'])
         nao_encontrados = colabs_atribuicoes - colabs_regras
         for colab in nao_encontrados:
-            self._log_validacao('ERRO', f"Colaborador '{colab}' das atribui√ß√µes n√£o encontrado na lista de colaboradores.", {"colaborador": colab})
+            self._log_validacao('ERRO', f"Colaborador '{colab}' das atribuiÁıes n„o encontrado na lista de colaboradores.", {"colaborador": colab})
 
-        # Registrar quais linhas possuem metas de fornecedores (√∫til para depura√ß√£o)
+        # Registrar quais linhas possuem metas de fornecedores (˙til para depuraÁ„o)
         metas_fornecedores_df = self.data.get('METAS_FORNECEDORES', pd.DataFrame())
         if not metas_fornecedores_df.empty:
             linhas_com_metas = sorted(metas_fornecedores_df['linha'].dropna().unique().tolist())
             self._log_validacao('INFO', f"Linhas com METAS_FORNECEDORES encontradas: {linhas_com_metas}", {'linhas': linhas_com_metas})
 
     def _preprocessar_dados(self):
-        """Prepara os dados para o c√°lculo, aplicando aliases e convers√µes."""
+        """Prepara os dados para o c·lculo, aplicando aliases e conversıes."""
         alias_map = self.data['ALIASES'][self.data['ALIASES']['entidade'] == 'colaborador'].set_index('alias')['padrao'].to_dict()
         
         # Aplica alias para todas as colunas de consultores nos arquivos de ERP
         for df_name in ['FATURADOS', 'CONVERSOES']:
             df = self.data.get(df_name, pd.DataFrame())
-            # Garantir colunas m√≠nimas para n√£o quebrar o fluxo quando o arquivo estiver ausente ou vazio
+            # Garantir colunas mÌnimas para n„o quebrar o fluxo quando o arquivo estiver ausente ou vazio
             if 'Consultor Interno' not in df.columns:
                 df['Consultor Interno'] = ''
             if 'Representante-pedido' not in df.columns:
@@ -315,33 +315,33 @@ class CalculoComissao:
         )
 
     def _calcular_realizado(self):
-        """Calcula os valores realizados para faturamento, convers√£o e rentabilidade."""
+        """Calcula os valores realizados para faturamento, convers„o e rentabilidade."""
         self.realizado = {}
-        # FATURADOS: garantir colunas esperadas e agregar com seguran√ßa
+        # FATURADOS: garantir colunas esperadas e agregar com seguranÁa
         df_fat = self.data.get('FATURADOS', pd.DataFrame()).copy()
         if 'Valor Realizado' not in df_fat.columns:
             df_fat['Valor Realizado'] = 0.0
-        if 'Neg√≥cio' not in df_fat.columns:
-            df_fat['Neg√≥cio'] = ''
+        if 'NegÛcio' not in df_fat.columns:
+            df_fat['NegÛcio'] = ''
         if 'Consultor Interno' not in df_fat.columns:
             df_fat['Consultor Interno'] = ''
-        self.realizado['faturamento_linha'] = df_fat.groupby('Neg√≥cio')['Valor Realizado'].sum() if not df_fat.empty else pd.Series(dtype=float)
+        self.realizado['faturamento_linha'] = df_fat.groupby('NegÛcio')['Valor Realizado'].sum() if not df_fat.empty else pd.Series(dtype=float)
         self.realizado['faturamento_individual'] = df_fat.groupby('Consultor Interno')['Valor Realizado'].sum() if not df_fat.empty else pd.Series(dtype=float)
 
-        # CONVERSOES: garantir colunas esperadas e agregar com seguran√ßa
+        # CONVERSOES: garantir colunas esperadas e agregar com seguranÁa
         df_conv = self.data.get('CONVERSOES', pd.DataFrame()).copy()
-        if 'Valor Or√ßado' not in df_conv.columns and 'Valor Orcado' in df_conv.columns:
-            # lidar com varia√ß√£o poss√≠vel de acentua√ß√£o
-            df_conv['Valor Or√ßado'] = df_conv['Valor Orcado']
-        if 'Valor Or√ßado' not in df_conv.columns:
-            df_conv['Valor Or√ßado'] = 0.0
-        if 'Neg√≥cio' not in df_conv.columns:
-            df_conv['Neg√≥cio'] = ''
+        if 'Valor OrÁado' not in df_conv.columns and 'Valor Orcado' in df_conv.columns:
+            # lidar com variaÁ„o possÌvel de acentuaÁ„o
+            df_conv['Valor OrÁado'] = df_conv['Valor Orcado']
+        if 'Valor OrÁado' not in df_conv.columns:
+            df_conv['Valor OrÁado'] = 0.0
+        if 'NegÛcio' not in df_conv.columns:
+            df_conv['NegÛcio'] = ''
         if 'Consultor Interno' not in df_conv.columns:
             df_conv['Consultor Interno'] = ''
-        self.realizado['conversao_linha'] = df_conv.groupby('Neg√≥cio')['Valor Or√ßado'].sum() if not df_conv.empty else pd.Series(dtype=float)
-        self.realizado['conversao_individual'] = df_conv.groupby('Consultor Interno')['Valor Or√ßado'].sum() if not df_conv.empty else pd.Series(dtype=float)
-        rent_realizada = self.data['RENTABILIDADE_REALIZADA'].rename(columns={'Neg√≥cio': 'linha'})
+        self.realizado['conversao_linha'] = df_conv.groupby('NegÛcio')['Valor OrÁado'].sum() if not df_conv.empty else pd.Series(dtype=float)
+        self.realizado['conversao_individual'] = df_conv.groupby('Consultor Interno')['Valor OrÁado'].sum() if not df_conv.empty else pd.Series(dtype=float)
+        rent_realizada = self.data['RENTABILIDADE_REALIZADA'].rename(columns={'NegÛcio': 'linha'})
         self.realizado['rentabilidade'] = rent_realizada.set_index(['linha', 'Grupo', 'Subgrupo', 'Tipo de Mercadoria'])['rentabilidade_realizada_pct']
 
     def _get_meta(self, tipo_meta, chave):
@@ -364,12 +364,12 @@ class CalculoComissao:
                 valor = df[(df['linha'] == linha) & (df['grupo'] == grupo) & (df['subgrupo'] == subgrupo) & (df['tipo_mercadoria'] == tipo_mercadoria)]['meta_rentabilidade_alvo_pct'].iloc[0]
                 return valor
         except (IndexError, KeyError):
-            self._log_validacao('AVISO', f"Meta n√£o encontrada para tipo '{tipo_meta}' e chave '{chave}'.", {'tipo_meta': tipo_meta, 'chave': chave})
+            self._log_validacao('AVISO', f"Meta n„o encontrada para tipo '{tipo_meta}' e chave '{chave}'.", {'tipo_meta': tipo_meta, 'chave': chave})
             return None
         return None
 
     def _calcular_fc_para_item(self, nome_colab, cargo_colab, item_faturado):
-        """Calcula um FC √∫nico para um colaborador e um item faturado espec√≠fico."""
+        """Calcula um FC ˙nico para um colaborador e um item faturado especÌfico."""
         pesos = self.data['PESOS_METAS'][self.data['PESOS_METAS']['cargo'] == cargo_colab]
         if pesos.empty:
             return 0
@@ -377,7 +377,7 @@ class CalculoComissao:
         fc_total_item = 0
 
         item_context = {
-            'linha': item_faturado['Neg√≥cio'], 'grupo': item_faturado['Grupo'],
+            'linha': item_faturado['NegÛcio'], 'grupo': item_faturado['Grupo'],
             'subgrupo': item_faturado['Subgrupo'], 'tipo_mercadoria': item_faturado['Tipo de Mercadoria']
         }
         
@@ -411,7 +411,7 @@ class CalculoComissao:
 
             self.auditoria_fc.append({
                 'colaborador': nome_colab, 'cargo': cargo_colab,
-                'cod_produto': item_faturado['C√≥digo Produto'],
+                'cod_produto': item_faturado['CÛdigo Produto'],
                 'linha_item': item_context['linha'],
                 'tipo_meta': tipo_meta, 'peso': peso,
                 'realizado': realizado, 'meta': meta,
@@ -420,13 +420,13 @@ class CalculoComissao:
             })
             
         cap_fc = float(self.params.get('cap_fc_max', 1.0))
-        # --- Novo componente: Reten√ß√£o de Clientes (aplica-se apenas a Gerente Linha) ---
+        # --- Novo componente: RetenÁ„o de Clientes (aplica-se apenas a Gerente Linha) ---
         try:
             if cargo_colab == 'Gerente Linha':
-                # Identificar a(s) linha(s) que o gerente √© respons√°vel a partir de ATRIBUICOES
+                # Identificar a(s) linha(s) que o gerente È respons·vel a partir de ATRIBUICOES
                 df_atr = self.data.get('ATRIBUICOES', pd.DataFrame())
                 linhas_do_gerente = df_atr[df_atr['colaborador'] == nome_colab]['linha'].dropna().unique()
-                # Se houver pelo menos uma linha atribu√≠da, usamos a primeira para reten√ß√£o
+                # Se houver pelo menos uma linha atribuÌda, usamos a primeira para retenÁ„o
                 if len(linhas_do_gerente) > 0 and 'RETENCAO_CLIENTES' in self.data:
                     linha_gerente = linhas_do_gerente[0]
                     df_ret = self.data.get('RETENCAO_CLIENTES', pd.DataFrame())
@@ -435,7 +435,7 @@ class CalculoComissao:
                     if not ret_row.empty:
                         clientes_ant = ret_row.iloc[0].get('clientes_mes_anterior', None)
                         clientes_atual = ret_row.iloc[0].get('clientes_mes_atual', None)
-                        # Tratamento: divis√£o por zero
+                        # Tratamento: divis„o por zero
                         try:
                             if clientes_ant is None or pd.isna(clientes_ant) or float(clientes_ant) == 0:
                                 taxa_retencao = 0.0
@@ -444,7 +444,7 @@ class CalculoComissao:
                         except Exception:
                             taxa_retencao = 0.0
 
-                        # Peso da meta para reten√ß√£o (em % na tabela PESOS_METAS)
+                        # Peso da meta para retenÁ„o (em % na tabela PESOS_METAS)
                         peso_ret = 0.0
                         pesos_df = self.data.get('PESOS_METAS', pd.DataFrame())
                         if not pesos_df.empty and 'retencao_clientes' in pesos_df.columns:
@@ -461,77 +461,77 @@ class CalculoComissao:
                         # Registrar na auditoria (tipo_meta = 'retencao_clientes')
                         self.auditoria_fc.append({
                             'colaborador': nome_colab, 'cargo': cargo_colab,
-                            'cod_produto': item_faturado.get('C√≥digo Produto', None),
-                            'linha_item': item_faturado.get('Neg√≥cio', None),
+                            'cod_produto': item_faturado.get('CÛdigo Produto', None),
+                            'linha_item': item_faturado.get('NegÛcio', None),
                             'tipo_meta': 'retencao_clientes', 'peso': peso_ret,
                             'realizado': clientes_atual, 'meta': clientes_ant,
                             'atingimento': taxa_retencao, 'atingimento_cap': atingimento_cap,
                             'componente_fc': componente_fc_ret
                         })
         except Exception:
-            # Em caso de qualquer erro nessa extens√£o, n√£o interrompemos o c√°lculo principal
+            # Em caso de qualquer erro nessa extens„o, n„o interrompemos o c·lculo principal
             pass
 
         # --- Novos componentes: metas por fornecedor (meta_fornecedor_1, meta_fornecedor_2) ---
         try:
             # Buscar metas de fornecedores para a linha do item
-            linha_do_item = item_faturado.get('Neg√≥cio')
+            linha_do_item = item_faturado.get('NegÛcio')
             metas_fornecedores_df = self.data.get('METAS_FORNECEDORES', pd.DataFrame())
             if not metas_fornecedores_df.empty and linha_do_item is not None:
                 metas_da_linha = metas_fornecedores_df[metas_fornecedores_df['linha'] == linha_do_item]
-                # Esperamos no m√°ximo dois fornecedores listados; iteramos e mapeamos para meta_fornecedor_1/2
+                # Esperamos no m·ximo dois fornecedores listados; iteramos e mapeamos para meta_fornecedor_1/2
                 fornecedores = metas_da_linha.to_dict('records')
 
-                # Se n√£o houver metas de fornecedores para essa linha, adicionar debug entry para rastreio
+                # Se n„o houver metas de fornecedores para essa linha, adicionar debug entry para rastreio
                 if len(fornecedores) == 0:
-                    # Por padr√£o n√£o poluir a aba de debug com linhas sem metas.
-                    # Se for necess√°rio ver esses casos, ative o par√¢metro 'debug_show_missing_fornecedores' em PARAMS
+                    # Por padr„o n„o poluir a aba de debug com linhas sem metas.
+                    # Se for necess·rio ver esses casos, ative o par‚metro 'debug_show_missing_fornecedores' em PARAMS
                     show_missing = str(self.params.get('debug_show_missing_fornecedores', False)).lower() in ('1', 'true', 'yes')
                     if show_missing:
                         self.debug_fornecedores.append({
                             'colaborador': nome_colab,
                             'cargo': cargo_colab,
-                            'cod_produto': item_faturado.get('C√≥digo Produto', None),
+                            'cod_produto': item_faturado.get('CÛdigo Produto', None),
                             'linha_item': linha_do_item,
                             'observacao': 'nenhuma_meta_fornecedor_na_linha',
                             'detalhe': 'METAS_FORNECEDORES vazia para esta linha'
                         })
 
-                # Determinar m√™s de apura√ß√£o a partir de 'Dt Emiss√£o' do item_faturado, se dispon√≠vel
+                # Determinar mÍs de apuraÁ„o a partir de 'Dt Emiss„o' do item_faturado, se disponÌvel
                 mes_apuracao = None
-                dt_emissao = item_faturado.get('Dt Emiss√£o') if 'Dt Emiss√£o' in item_faturado.index else None
+                dt_emissao = item_faturado.get('Dt Emiss„o') if 'Dt Emiss„o' in item_faturado.index else None
                 if pd.notna(dt_emissao):
                     try:
                         mes_apuracao = pd.to_datetime(dt_emissao).month
                     except Exception:
                         mes_apuracao = None
 
-                # Se n√£o encontrarmos m√™s, usamos m√™s atual
+                # Se n„o encontrarmos mÍs, usamos mÍs atual
                 if mes_apuracao is None:
                     mes_apuracao = datetime.now().month
 
-                # Preparar lista de moedas necess√°rias para busca de c√¢mbio
+                # Preparar lista de moedas necess·rias para busca de c‚mbio
                 moedas_necessarias = set()
                 for f in fornecedores[:2]:
                     moeda = f.get('moeda')
                     if moeda:
                         moedas_necessarias.add(moeda)
 
-                # Buscar taxas de c√¢mbio para o ano corrente
-                ano_corrente = pd.to_datetime(item_faturado.get('Dt Emiss√£o', datetime.now())).year
+                # Buscar taxas de c‚mbio para o ano corrente
+                ano_corrente = pd.to_datetime(item_faturado.get('Dt Emiss„o', datetime.now())).year
                 taxas = self._get_taxas_de_cambio(ano_corrente, mes_apuracao, list(moedas_necessarias)) if moedas_necessarias else {}
 
-                # Para cada fornecedor (at√© 2), calculamos o componente
+                # Para cada fornecedor (atÈ 2), calculamos o componente
                 for idx, fornecedor in enumerate(fornecedores[:2], start=1):
                     fornecedor_nome = fornecedor.get('fornecedor')
                     meta_anual = fornecedor.get('meta_anual')
                     moeda = fornecedor.get('moeda')
-                    # Inicializar logger (pode n√£o existir)
+                    # Inicializar logger (pode n„o existir)
                     logger = getattr(self, '_logger', None)
-                    # Logs detalhados para depura√ß√£o no terminal
+                    # Logs detalhados para depuraÁ„o no terminal
                     try:
                         if logger and logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(f"Iniciando c√°lculo fornecedor#{idx} para colaborador={nome_colab} cargo={cargo_colab} linha={linha_do_item} fornecedor={fornecedor_nome} moeda={moeda} meta_anual={meta_anual}")
+                            logger.debug(f"Iniciando c·lculo fornecedor#{idx} para colaborador={nome_colab} cargo={cargo_colab} linha={linha_do_item} fornecedor={fornecedor_nome} moeda={moeda} meta_anual={meta_anual}")
                     except Exception:
                         pass
                     if meta_anual is None or fornecedor_nome is None:
@@ -551,10 +551,10 @@ class CalculoComissao:
                     else:
                         filt = (faturados_ytd['Fabricante'] == fornecedor_nome)
                         vendas_fornecedor = faturados_ytd[filt].copy()
-                        if 'Dt Emiss√£o' in vendas_fornecedor.columns:
-                            vendas_fornecedor['mes'] = vendas_fornecedor['Dt Emiss√£o'].dt.month
+                        if 'Dt Emiss„o' in vendas_fornecedor.columns:
+                            vendas_fornecedor['mes'] = vendas_fornecedor['Dt Emiss„o'].dt.month
                         else:
-                            # Tentar inferir m√™s a partir de outra coluna ou assumir todo em mes_apuracao
+                            # Tentar inferir mÍs a partir de outra coluna ou assumir todo em mes_apuracao
                             vendas_fornecedor['mes'] = mes_apuracao
 
                         faturamento_realizado_ytd = 0.0
@@ -564,9 +564,9 @@ class CalculoComissao:
                             taxa_mes = None
                             if moeda and taxas and moeda in taxas and mes in taxas[moeda]:
                                 taxa_mes = taxas[moeda].get(mes)
-                            # Se taxa_mes for None ou zero, evitamos convers√£o e consideramos 0 convertido
+                            # Se taxa_mes for None ou zero, evitamos convers„o e consideramos 0 convertido
                             if taxa_mes and taxa_mes != 0:
-                                # taxa_mes √© a taxa no formato (moeda por 1 BRL),
+                                # taxa_mes È a taxa no formato (moeda por 1 BRL),
                                 # ou seja: 1 BRL = taxa_mes * MOEDA. Para converter
                                 # soma_brl (em BRL) para a moeda alvo, multiplicamos.
                                 faturamento_convertido = float(soma_brl) * float(taxa_mes)
@@ -580,7 +580,7 @@ class CalculoComissao:
                                 pass
                             faturamento_realizado_ytd += faturamento_convertido
 
-                    # C√°lculo do atingimento e componente
+                    # C·lculo do atingimento e componente
                     try:
                         atingimento = (faturamento_realizado_ytd / meta_ytd) if meta_ytd and meta_ytd > 0 else 0.0
                     except Exception:
@@ -609,11 +609,11 @@ class CalculoComissao:
                     except Exception:
                         pass
 
-                        # Coleta de depura√ß√£o para este c√°lculo de fornecedor
+                        # Coleta de depuraÁ„o para este c·lculo de fornecedor
                     debug_entry = {
                         'colaborador': nome_colab,
                         'cargo': cargo_colab,
-                        'cod_produto': item_faturado.get('C√≥digo Produto', None),
+                        'cod_produto': item_faturado.get('CÛdigo Produto', None),
                         'linha_item': linha_do_item,
                         'fornecedor_index': idx,
                         'fornecedor': fornecedor_nome,
@@ -628,7 +628,7 @@ class CalculoComissao:
                         'atingimento_cap': atingimento_cap,
                         'componente_fc': componente_fc_forn
                     }
-                    # Observa√ß√µes sobre taxas usadas (se houver)
+                    # ObservaÁıes sobre taxas usadas (se houver)
                     taxas_obs = {}
                     if moeda and 'taxas' in locals() and isinstance(taxas, dict) and moeda in taxas:
                         taxas_obs = taxas.get(moeda, {})
@@ -642,7 +642,7 @@ class CalculoComissao:
                     # Registrar auditoria
                     self.auditoria_fc.append({
                         'colaborador': nome_colab, 'cargo': cargo_colab,
-                        'cod_produto': item_faturado.get('C√≥digo Produto', None),
+                        'cod_produto': item_faturado.get('CÛdigo Produto', None),
                         'linha_item': linha_do_item,
                         'tipo_meta': peso_col_name, 'peso': peso_fornecedor,
                         'realizado': faturamento_realizado_ytd, 'meta': meta_ytd,
@@ -650,19 +650,19 @@ class CalculoComissao:
                         'componente_fc': componente_fc_forn, 'moeda': moeda
                     })
         except Exception as e:
-            # N√£o interromper fluxo principal em caso de erro nos componentes de fornecedor
-            self._log_validacao('AVISO', f'Erro ao calcular metas de fornecedores: {e}', {'item': item_faturado.get('C√≥digo Produto', None)})
+            # N„o interromper fluxo principal em caso de erro nos componentes de fornecedor
+            self._log_validacao('AVISO', f'Erro ao calcular metas de fornecedores: {e}', {'item': item_faturado.get('CÛdigo Produto', None)})
 
         return min(fc_total_item, cap_fc)
 
     def _get_taxas_de_cambio(self, ano, mes_final, moedas):
-        """Retorna dicion√°rio {moeda: {mes: taxa}} com m√©dia mensal de cada moeda do m√™s 1..mes_final.
+        """Retorna dicion·rio {moeda: {mes: taxa}} com mÈdia mensal de cada moeda do mÍs 1..mes_final.
 
-        Estrat√©gia:
-        - Tenta usar o endpoint timeseries do exchangerate.host para cada m√™s.
-        - Em caso de falha (ex: 5xx), faz at√© N tentativas com backoff exponencial.
-        - Se continuar falhando, tenta fallback com uma requisi√ß√£o por m√™s ao servi√ßo frankfurter.app usando a data central do m√™s (15¬∫ dia) como proxy da m√©dia.
-        - Registra avisos no log de valida√ß√£o quando n√£o for poss√≠vel obter taxas e preenche com None para esses meses.
+        EstratÈgia:
+        - Tenta usar o endpoint timeseries do exchangerate.host para cada mÍs.
+        - Em caso de falha (ex: 5xx), faz atÈ N tentativas com backoff exponencial.
+        - Se continuar falhando, tenta fallback com uma requisiÁ„o por mÍs ao serviÁo frankfurter.app usando a data central do mÍs (15∫ dia) como proxy da mÈdia.
+        - Registra avisos no log de validaÁ„o quando n„o for possÌvel obter taxas e preenche com None para esses meses.
         """
         moedas = list(set(moedas))
         cache_key = (ano, mes_final, tuple(sorted(moedas)))
@@ -672,7 +672,7 @@ class CalculoComissao:
         resultado = {m: {} for m in moedas}
 
         if requests is None:
-            self._log_validacao('AVISO', 'Biblioteca requests n√£o dispon√≠vel; taxas de c√¢mbio n√£o ser√£o buscadas.', {'moedas': moedas})
+            self._log_validacao('AVISO', 'Biblioteca requests n„o disponÌvel; taxas de c‚mbio n„o ser„o buscadas.', {'moedas': moedas})
             self.cache_cambio[cache_key] = resultado
             return resultado
 
@@ -681,7 +681,7 @@ class CalculoComissao:
             for attempt in range(1, max_retries + 1):
                 try:
                     if requests is None:
-                        raise Exception('requests n√£o dispon√≠vel')
+                        raise Exception('requests n„o disponÌvel')
                     r = requests.get(url, params=params, headers=headers, timeout=12)
                     if r.status_code == 200:
                         return r
@@ -690,9 +690,9 @@ class CalculoComissao:
                     last_exc = e
                 # backoff
                 time.sleep(backoff * (2 ** (attempt - 1)))
-            # Ap√≥s tentativas, relan√ßa a √∫ltima exce√ß√£o encapsulada
+            # ApÛs tentativas, relanÁa a ˙ltima exceÁ„o encapsulada
             if last_exc is None:
-                raise Exception('Falha desconhecida na requisi√ß√£o')
+                raise Exception('Falha desconhecida na requisiÁ„o')
             raise last_exc
 
         for moeda in moedas:
@@ -707,8 +707,8 @@ class CalculoComissao:
                         r = _fetch_with_retries(url_timeseries, params=params, max_retries=3, backoff=1.0)
                         resp = r
                     except Exception as e_ts:
-                        # registrar aviso e tentar fallback por dia central do m√™s
-                        self._log_validacao('AVISO', f'Timeseries falhou para {moeda} m√™s {mes}: {e_ts}. Tentando fallback di√°rio.', {'moeda': moeda, 'mes': mes})
+                        # registrar aviso e tentar fallback por dia central do mÍs
+                        self._log_validacao('AVISO', f'Timeseries falhou para {moeda} mÍs {mes}: {e_ts}. Tentando fallback di·rio.', {'moeda': moeda, 'mes': mes})
 
                     rates = []
                     if resp is not None:
@@ -722,7 +722,7 @@ class CalculoComissao:
                         resultado[moeda][mes] = sum(rates) / len(rates)
                         continue
 
-                    # Fallback: usar data central do m√™s (15¬∫ dia ou √∫ltimo dia se menor)
+                    # Fallback: usar data central do mÍs (15∫ dia ou ˙ltimo dia se menor)
                     dia_central = min(15, calendar.monthrange(ano, mes)[1])
                     data_central = datetime(ano, mes, dia_central).date().isoformat()
                     # Primeiro tentar frankfurter
@@ -736,9 +736,9 @@ class CalculoComissao:
                             resultado[moeda][mes] = v_fk
                             continue
                     except Exception as e_fk:
-                        self._log_validacao('AVISO', f'Fallback frankfurter falhou para {moeda} m√™s {mes}: {e_fk}', {'moeda': moeda, 'mes': mes})
+                        self._log_validacao('AVISO', f'Fallback frankfurter falhou para {moeda} mÍs {mes}: {e_fk}', {'moeda': moeda, 'mes': mes})
 
-                    # √öltimo recurso: tentar endpoint convert do exchangerate.host para a data_central
+                    # ⁄ltimo recurso: tentar endpoint convert do exchangerate.host para a data_central
                     try:
                         url_conv = f"https://api.exchangerate.host/convert"
                         params_conv = {'from': 'BRL', 'to': moeda, 'date': data_central}
@@ -750,22 +750,22 @@ class CalculoComissao:
                             resultado[moeda][mes] = float(v_conv)
                             continue
                     except Exception as e_conv:
-                        self._log_validacao('AVISO', f'Fallback convert falhou para {moeda} m√™s {mes}: {e_conv}', {'moeda': moeda, 'mes': mes})
+                        self._log_validacao('AVISO', f'Fallback convert falhou para {moeda} mÍs {mes}: {e_conv}', {'moeda': moeda, 'mes': mes})
 
                     # Se tudo falhar, preenche com None e registra
                     resultado[moeda][mes] = None
-                    self._log_validacao('AVISO', f'N√£o foi poss√≠vel obter taxa para {moeda} m√™s {mes}; valor ficar√° vazio.', {'moeda': moeda, 'mes': mes})
+                    self._log_validacao('AVISO', f'N„o foi possÌvel obter taxa para {moeda} mÍs {mes}; valor ficar· vazio.', {'moeda': moeda, 'mes': mes})
 
                 except Exception as e_outer:
                     resultado[moeda][mes] = None
-                    self._log_validacao('AVISO', f'Erro inesperado ao obter taxa para {moeda} m√™s {mes}: {e_outer}', {'moeda': moeda, 'mes': mes})
+                    self._log_validacao('AVISO', f'Erro inesperado ao obter taxa para {moeda} mÍs {mes}: {e_outer}', {'moeda': moeda, 'mes': mes})
 
         self.cache_cambio[cache_key] = resultado
         return resultado
 
     # ------------------ Estado e Reconciliacao (Recebimentos) ------------------
     def _carregar_estado(self):
-        """Carrega ou inicializa o arquivo de estado que guarda adiantamentos e reconcilia√ß√µes."""
+        """Carrega ou inicializa o arquivo de estado que guarda adiantamentos e reconciliaÁıes."""
         try:
             # Definir esquema correto do estado
             expected = ['PROCESSO', 'VALOR_TOTAL_PROCESSO', 'TOTAL_PAGO_ACUMULADO', 'TOTAL_ADIANTADO_COMISSAO',
@@ -790,7 +790,7 @@ class CalculoComissao:
                 self.estado = pd.DataFrame(columns=expected)
         except Exception as e:
             self._log_validacao('AVISO', f'Falha ao carregar estado ({ARQUIVO_ESTADO}): {e}', {})
-            # Garantir esquema m√≠nimo em caso de erro
+            # Garantir esquema mÌnimo em caso de erro
             self.estado = pd.DataFrame(columns=['PROCESSO', 'VALOR_TOTAL_PROCESSO', 'TOTAL_PAGO_ACUMULADO', 'TOTAL_ADIANTADO_COMISSAO', 'STATUS_RECONCILIACAO', 'STATUS_PROCESSO_ANALISE', 'ULTIMA_ATUALIZACAO'])
 
     def _salvar_estado(self):
@@ -808,12 +808,12 @@ class CalculoComissao:
             self._log_validacao('AVISO', f'Falha ao salvar estado em {ARQUIVO_ESTADO}: {e}', {})
 
     def _aplicar_adiantamentos_recebimentos(self):
-        """Calcula e aplica adiantamentos de comiss√£o baseados nos recebimentos do m√™s.
+        """Calcula e aplica adiantamentos de comiss„o baseados nos recebimentos do mÍs.
 
-        Estrat√©gia:
-        - Para cada PROCESSO presente em RECEBIMENTOS, soma a comiss√£o calculada (original) para o processo.
-        - Calcula um adiantamento percentual (par√¢metro 'percentual_adiantamento_recebimento', default=0.5)
-          sobre a comiss√£o total e cria linhas adicionais em self.comissoes_df com tipo_lancamento='Adiantamento Recebimento'.
+        EstratÈgia:
+        - Para cada PROCESSO presente em RECEBIMENTOS, soma a comiss„o calculada (original) para o processo.
+        - Calcula um adiantamento percentual (par‚metro 'percentual_adiantamento_recebimento', default=0.5)
+          sobre a comiss„o total e cria linhas adicionais em self.comissoes_df com tipo_lancamento='Adiantamento Recebimento'.
         - Atualiza self.estado.TOTAL_ADIANTADO_COMISSAO para cada processo.
         """
         try:
@@ -830,10 +830,10 @@ class CalculoComissao:
             df_colabs_com_cargos = self.data.get('COLABORADORES', pd.DataFrame())
             df_status_pag = self.data.get('STATUS_PAGAMENTOS', pd.DataFrame())
 
-            cargos_gestao = df_colabs_com_cargos[df_colabs_com_cargos['tipo_cargo'] == 'Gest√£o']['cargo'].unique() if not df_colabs_com_cargos.empty else []
+            cargos_gestao = df_colabs_com_cargos[df_colabs_com_cargos['tipo_cargo'] == 'Gest„o']['cargo'].unique() if not df_colabs_com_cargos.empty else []
             df_atribuicoes_gestao = df_atr[df_atr['cargo'].isin(cargos_gestao)] if not df_atr.empty else pd.DataFrame()
 
-            # Processar cada recebimento: atualizar estado (criar nova linha se necess√°rio)
+            # Processar cada recebimento: atualizar estado (criar nova linha se necess·rio)
             for _, rec in df_rec.iterrows():
                 proc = rec.get('PROCESSO')
                 valor_recebido = rec.get('VALOR_RECEBIDO')
@@ -842,7 +842,7 @@ class CalculoComissao:
 
                 proc = int(proc) if (not pd.isna(proc) and str(proc).strip().isdigit()) else str(proc).strip()
 
-                # Obter VALOR_ORIGINAL do arquivo Status_Pagamentos_Processos, se dispon√≠vel
+                # Obter VALOR_ORIGINAL do arquivo Status_Pagamentos_Processos, se disponÌvel
                 valor_original = None
                 try:
                     if not df_status_pag.empty and 'PROCESSO' in df_status_pag.columns:
@@ -850,22 +850,22 @@ class CalculoComissao:
                         if sp.empty and 'Processo' in df_status_pag.columns:
                             sp = df_status_pag[df_status_pag['Processo'] == proc]
                         if not sp.empty:
-                            # procurar colunas poss√≠veis para VALOR_ORIGINAL
+                            # procurar colunas possÌveis para VALOR_ORIGINAL
                             for col_candidate in ('VALOR_ORIGINAL', 'Valor Original', 'Valor_Original', 'VALOR'):
                                 if col_candidate in sp.columns:
                                     valor_original = sp.iloc[0][col_candidate]
                                     break
                 except Exception:
                     valor_original = None
-                # Preferir valor do Analise_Comercial_Completa (Valor Or√ßado e aliases) quando existir
+                # Preferir valor do Analise_Comercial_Completa (Valor OrÁado e aliases) quando existir
                 try:
                     df_analise_local2 = self.data.get('ANALISE_COMERCIAL_COMPLETA', pd.DataFrame())
                     if not df_analise_local2.empty and 'Processo' in df_analise_local2.columns:
                         sp_a2 = df_analise_local2[df_analise_local2['Processo'].astype(str).str.strip() == str(proc)]
                         if not sp_a2.empty:
                             aliases = [
-                                'Valor Or√ßado','Valor Orcado','Valor Or√ßado Total','Valor Orcado Total',
-                                'Valor do Or√ßado','Valor do Orcado'
+                                'Valor OrÁado','Valor Orcado','Valor OrÁado Total','Valor Orcado Total',
+                                'Valor do OrÁado','Valor do Orcado'
                             ]
                             for alt in aliases:
                                 if alt in sp_a2.columns:
@@ -876,7 +876,7 @@ class CalculoComissao:
                 except Exception:
                     pass
 
-                # Se o processo n√£o existir no estado, criar uma nova linha
+                # Se o processo n„o existir no estado, criar uma nova linha
                 sidx = self.estado[self.estado['PROCESSO'] == proc].index
                 if len(sidx) == 0:
                     nova = {
@@ -919,10 +919,10 @@ class CalculoComissao:
                     self.estado.at[idx0, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
 
                 # Nota: nesta etapa apenas registramos/atualizamos o estado com os recebimentos.
-                # A gera√ß√£o de linhas de adiantamento (novas_linhas) permanece separada e s√≥
-                # ser√° executada se houver l√≥gica adicional preenchendo `novas_linhas`.
+                # A geraÁ„o de linhas de adiantamento (novas_linhas) permanece separada e sÛ
+                # ser· executada se houver lÛgica adicional preenchendo `novas_linhas`.
 
-            # Ap√≥s processar todos os recebimentos, atualizar STATUS_PROCESSO_ANALISE
+            # ApÛs processar todos os recebimentos, atualizar STATUS_PROCESSO_ANALISE
             try:
                 df_analise = self.data.get('ANALISE_COMERCIAL_COMPLETA', pd.DataFrame())
                 if not df_analise.empty and 'Processo' in df_analise.columns and 'Status Processo' in df_analise.columns:
@@ -938,11 +938,11 @@ class CalculoComissao:
                     proc_key = str(self.estado.at[idx, 'PROCESSO']).strip()
                     status_proc = mapa_status.get(proc_key)
                     if status_proc is None:
-                        # tentar procurar por inteiros/sem formata√ß√£o
+                        # tentar procurar por inteiros/sem formataÁ„o
                         status_proc = mapa_status.get(str(int(float(proc_key))) if proc_key.replace('.','',1).isdigit() else None)
                     self.estado.at[idx, 'STATUS_PROCESSO_ANALISE'] = status_proc
                 except Exception:
-                    # n√£o bloquear o fluxo se houver problemas de formata√ß√£o
+                    # n„o bloquear o fluxo se houver problemas de formataÁ„o
                     self.estado.at[idx, 'STATUS_PROCESSO_ANALISE'] = None
 
             if novas_linhas:
@@ -989,7 +989,7 @@ class CalculoComissao:
 
             # Exigir ANALISE_COMERCIAL_COMPLETA: sem fallback permitido
             if df_analise is None or df_analise.empty:
-                self._log_validacao('ERRO', 'ANALISE_COMERCIAL_COMPLETA ausente; n√£o √© permitido fallback para FATURADOS. COMISSOES_RECEBIMENTO n√£o ser√° gerada.', {})
+                self._log_validacao('ERRO', 'ANALISE_COMERCIAL_COMPLETA ausente; n„o È permitido fallback para FATURADOS. COMISSOES_RECEBIMENTO n„o ser· gerada.', {})
                 return
             df_map = df_analise
             map_source = 'ANALISE_COMERCIAL_COMPLETA'
@@ -1071,7 +1071,7 @@ class CalculoComissao:
                             'fator_correcao_fc': None,
                             'comissao_calculada': None,
                             'tipo_lancamento': 'Recebimento',
-                            'observacao': f'Processo n√£o mapeado em {map_source}',
+                            'observacao': f'Processo n„o mapeado em {map_source}',
                             'mapping_found': False
                         }
                         rows.append(placeholder)
@@ -1081,11 +1081,11 @@ class CalculoComissao:
                     if getattr(self, '_logger', None):
                         self._logger.info(f"Processo {proc} mapeado via {why} para processo faturado {primeira.get('Processo')}")
                     contexto = {
-                        'linha': primeira.get('Neg√≥cio'), 'grupo': primeira.get('Grupo'),
+                        'linha': primeira.get('NegÛcio'), 'grupo': primeira.get('Grupo'),
                         'subgrupo': primeira.get('Subgrupo'), 'tipo_mercadoria': primeira.get('Tipo de Mercadoria')
                     }
 
-                    # identificar colaboradores respons√°veis (gest√£o e operacional) usando as mesmas regras de atribui√ß√µes
+                    # identificar colaboradores respons·veis (gest„o e operacional) usando as mesmas regras de atribuiÁıes
                     df_atr = self.data.get('ATRIBUICOES', pd.DataFrame())
                     nomes_operacionais = []
                     if pd.notna(primeira.get('Consultor Interno')):
@@ -1093,7 +1093,7 @@ class CalculoComissao:
                     if pd.notna(primeira.get('Representante-pedido')):
                         nomes_operacionais.append(primeira.get('Representante-pedido'))
 
-                    cargos_gestao = df_colabs[df_colabs['tipo_cargo'] == 'Gest√£o']['cargo'].unique() if not df_colabs.empty else []
+                    cargos_gestao = df_colabs[df_colabs['tipo_cargo'] == 'Gest„o']['cargo'].unique() if not df_colabs.empty else []
                     df_atribuicoes_gestao = df_atr[df_atr['cargo'].isin(cargos_gestao)] if not df_atr.empty else pd.DataFrame()
 
                     atribuidos_gestao = df_atribuicoes_gestao[
@@ -1137,16 +1137,16 @@ class CalculoComissao:
                             'fator_correcao_fc': 1.0,
                             'comissao_calculada': com_calc,
                             'tipo_lancamento': 'Recebimento',
-                            'observacao': 'Comiss√£o por Recebimento'
+                            'observacao': 'Comiss„o por Recebimento'
                         }
                         if getattr(self, '_logger', None):
                             self._logger.info(f"Linha gerada para COMISSOES_RECEBIMENTO: {linha_receb}")
                         rows.append(linha_receb)
-                # Ao final, criar DataFrame mesmo se s√≥ placeholders
+                # Ao final, criar DataFrame mesmo se sÛ placeholders
                 self.comissoes_recebimento_df = pd.DataFrame(rows) if rows else pd.DataFrame()
                 if getattr(self, '_logger', None):
                     self._logger.info(f"Recebimentos processados: total={total_rec}, matched={total_matched}, unmatched={total_unmatched}, linhas geradas={len(rows)}")
-                # Registrar na valida√ß√£o para inspe√ß√£o
+                # Registrar na validaÁ„o para inspeÁ„o
                 self._log_validacao('INFO', f'Recebimentos processados: total={total_rec}, matched={total_matched}, unmatched={total_unmatched}', {'total': total_rec, 'matched': total_matched, 'unmatched': total_unmatched})
         except Exception as e:
             self._log_validacao('AVISO', f'Erro ao gerar COMISSOES_RECEBIMENTO: {e}', {})
@@ -1166,10 +1166,10 @@ class CalculoComissao:
             self._log_validacao('AVISO', f'Falha ao atualizar TOTAL_ADIANTADO_COMISSAO a partir de COMISSOES_RECEBIMENTO: {e}', {})
 
     def _executar_reconciliacoes(self):
-        """Executa reconcilia√ß√µes para processos pagos, comparando comiss√µes corretas e adiantamentos.
+        """Executa reconciliaÁıes para processos pagos, comparando comissıes corretas e adiantamentos.
 
         - Para cada processo com STATUS_PAGAMENTO indicando pagamento, e que esteja Pendente no estado,
-          soma a comiss√£o correta (linhas n√£o-Adiantamento) e calcula saldo = correto - TOTAL_ADIANTADO_COMISSAO.
+          soma a comiss„o correta (linhas n„o-Adiantamento) e calcula saldo = correto - TOTAL_ADIANTADO_COMISSAO.
         - Atualiza self.estado e cria self.reconciliacao_df para escrita no Excel.
         """
         reconc_list = []
@@ -1200,7 +1200,7 @@ class CalculoComissao:
                         proc_s = str(proc).strip()
                         match = df_anal[df_anal['Processo'].astype(str).str.strip() == proc_s]
                         if match.empty:
-                            # tentar buscar por convers√µes num√©ricas
+                            # tentar buscar por conversıes numÈricas
                             try:
                                 proc_int = int(float(proc))
                                 match = df_anal[df_anal['Processo'].astype(str).str.strip() == str(proc_int)]
@@ -1226,7 +1226,7 @@ class CalculoComissao:
                 except Exception:
                     cond_fat_analise = False
 
-                # exige as duas condi√ß√µes: pagamento quitado E status na analise == faturado
+                # exige as duas condiÁıes: pagamento quitado E status na analise == faturado
                 if not (cond_pag and cond_fat_analise):
                     continue
 
@@ -1243,7 +1243,7 @@ class CalculoComissao:
                         total_adiant = 0.0
                     status_recon = self.estado.at[sidx[0], 'STATUS_RECONCILIACAO']
 
-                # pular se j√° reconciliado (STATUS_RECONCILIACAO marcado como 'Realizada' ou 'Concluida')
+                # pular se j· reconciliado (STATUS_RECONCILIACAO marcado como 'Realizada' ou 'Concluida')
                 if isinstance(status_recon, str) and status_recon.strip().lower() in ('concluida', 'realizada'):
                     continue
 
@@ -1273,12 +1273,12 @@ class CalculoComissao:
                     for _, com_row in df_proc_orig.iterrows():
                         try:
                             item_fat = {
-                                'Neg√≥cio': com_row.get('linha'),
+                                'NegÛcio': com_row.get('linha'),
                                 'Grupo': com_row.get('grupo'),
                                 'Subgrupo': com_row.get('subgrupo'),
                                 'Tipo de Mercadoria': com_row.get('tipo_mercadoria'),
-                                'C√≥digo Produto': com_row.get('cod_produto'),
-                                'Dt Emiss√£o': None
+                                'CÛdigo Produto': com_row.get('cod_produto'),
+                                'Dt Emiss„o': None
                             }
                             nome_col = com_row.get('nome_colaborador')
                             cargo_col = com_row.get('cargo')
@@ -1289,14 +1289,14 @@ class CalculoComissao:
                             com_calc = fatur_item * taxa_rateio * pe * fc_retro
                             comissao_corret += com_calc
                         except Exception as e:
-                            self._log_validacao('AVISO', f'Erro ao calcular comiss√£o correta retroativa para processo {proc}: {e}', {'processo': proc})
+                            self._log_validacao('AVISO', f'Erro ao calcular comiss„o correta retroativa para processo {proc}: {e}', {'processo': proc})
 
                 saldo = comissao_corret - total_adiant
 
-                # Atualizar estado e marcar reconcilia√ß√£o como realizada
+                # Atualizar estado e marcar reconciliaÁ„o como realizada
                 try:
                     if len(sidx) == 0:
-                        # incluir VALOR_TOTAL_PROCESSO quando dispon√≠vel a partir do arquivo de status
+                        # incluir VALOR_TOTAL_PROCESSO quando disponÌvel a partir do arquivo de status
                         valor_total = None
                         try:
                             if not df_status.empty and 'VALOR_ORIGINAL' in df_status.columns:
@@ -1324,7 +1324,7 @@ class CalculoComissao:
                         except Exception:
                             pass
                 except Exception as e:
-                    self._log_validacao('AVISO', f'Erro ao atualizar estado na reconcilia√ß√£o do processo {proc}: {e}', {})
+                    self._log_validacao('AVISO', f'Erro ao atualizar estado na reconciliaÁ„o do processo {proc}: {e}', {})
 
                 reconc_list.append({
                     'PROCESSO': proc,
@@ -1336,11 +1336,11 @@ class CalculoComissao:
 
             self.reconciliacao_df = pd.DataFrame(reconc_list)
         except Exception as e:
-            self._log_validacao('AVISO', f'Erro ao executar reconcilia√ß√µes: {e}', {})
+            self._log_validacao('AVISO', f'Erro ao executar reconciliaÁıes: {e}', {})
             self.reconciliacao_df = pd.DataFrame(reconc_list)
 
     def _get_regra_comissao(self, linha, grupo, subgrupo, tipo_mercadoria, cargo):
-        """Busca a regra de comiss√£o com base na hierarquia de especificidade."""
+        """Busca a regra de comiss„o com base na hierarquia de especificidade."""
         chave_cache = (linha, grupo, subgrupo, tipo_mercadoria, cargo)
         if chave_cache in self.cache_regras:
             return self.cache_regras[chave_cache]
@@ -1359,26 +1359,26 @@ class CalculoComissao:
                 self.cache_regras[chave_cache] = regra.iloc[0]
                 return regra.iloc[0]
 
-        self._log_validacao('ERRO', f"Nenhuma regra de comiss√£o encontrada.", {"linha": linha, "grupo": grupo, "subgrupo": subgrupo, "tipo_mercadoria": tipo_mercadoria, "cargo": cargo})
+        self._log_validacao('ERRO', f"Nenhuma regra de comiss„o encontrada.", {"linha": linha, "grupo": grupo, "subgrupo": subgrupo, "tipo_mercadoria": tipo_mercadoria, "cargo": cargo})
         self.cache_regras[chave_cache] = None
         return None
 
-    # ---------- Helpers para reconcilia√ß√£o retroativa ----------
+    # ---------- Helpers para reconciliaÁ„o retroativa ----------
     def _load_historic_files(self, mes, ano):
-        """Carrega os arquivos de metas/rentabilidade/convers√µes para o m√™s/ano especificado.
+        """Carrega os arquivos de metas/rentabilidade/conversıes para o mÍs/ano especificado.
 
-        Retorna um dicion√°rio com chaves: 'METAS_APLICACAO', 'METAS_INDIVIDUAIS', 'META_RENTABILIDADE',
-        'CONVERSOES', 'RENTABILIDADE_REALIZADA' (quando aplic√°vel). Caso n√£o encontre, retorna DataFrames vazios.
+        Retorna um dicion·rio com chaves: 'METAS_APLICACAO', 'METAS_INDIVIDUAIS', 'META_RENTABILIDADE',
+        'CONVERSOES', 'RENTABILIDADE_REALIZADA' (quando aplic·vel). Caso n„o encontre, retorna DataFrames vazios.
         """
         result = {}
         try:
-            # Tentativa de localizar arquivos espec√≠ficos do m√™s/ano com base em conven√ß√£o observada.
-            meses_pt = [None, 'Janeiro', 'Fevereiro', 'Mar√ßo', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+            # Tentativa de localizar arquivos especÌficos do mÍs/ano com base em convenÁ„o observada.
+            meses_pt = [None, 'Janeiro', 'Fevereiro', 'MarÁo', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
             month_name = meses_pt[mes] if mes and 1 <= int(mes) <= 12 else None
 
-            # Padr√µes observados no workspace:
+            # Padrıes observados no workspace:
             # - "Faturados {Mes} {Ano}.xlsx"
-            # - "Convers√µes {Mes} {Ano}.xlsx"
+            # - "Conversıes {Mes} {Ano}.xlsx"
             # - "Rentabilidade_Realizada_{Mes}_{Ano}.xlsx"
             # - "Faturados_YTD_{Mes}_{Ano}.xlsx"
             def try_read(path):
@@ -1391,7 +1391,7 @@ class CalculoComissao:
 
             if month_name and ano:
                 faturados_name = f"Faturados {month_name} {ano}.xlsx"
-                conversoes_name = f"Convers√µes {month_name} {ano}.xlsx"
+                conversoes_name = f"Conversıes {month_name} {ano}.xlsx"
                 rentab_name = f"Rentabilidade_Realizada_{month_name}_{ano}.xlsx"
                 faturados_ytd_name = f"Faturados_YTD_{month_name}_{ano}.xlsx"
             else:
@@ -1409,9 +1409,9 @@ class CalculoComissao:
             result['METAS_APLICACAO'] = regras.get('METAS_APLICACAO', pd.DataFrame())
             result['METAS_INDIVIDUAIS'] = regras.get('METAS_INDIVIDUAIS', pd.DataFrame())
             result['META_RENTABILIDADE'] = regras.get('META_RENTABILIDADE', pd.DataFrame())
-            # tamb√©m tentar carregar metas por fornecedor se presentes nas regras
+            # tambÈm tentar carregar metas por fornecedor se presentes nas regras
             result['METAS_FORNECEDORES'] = regras.get('METAS_FORNECEDORES', pd.DataFrame())
-            # tentar carregar reten√ß√£o de clientes hist√≥rica a partir de arquivo nomeado ou do arquivo padr√£o
+            # tentar carregar retenÁ„o de clientes histÛrica a partir de arquivo nomeado ou do arquivo padr„o
             try:
                 ret_name = f"Retencao_Clientes_{month_name}_{ano}.xlsx" if month_name and ano else ARQUIVO_RETENCAO
                 ret_df = try_read(ret_name)
@@ -1426,14 +1426,14 @@ class CalculoComissao:
         return result
 
     def _calcular_fc_retroativo_for_item(self, nome_colab, cargo_colab, item_faturado, historic_data, mes_fat, ano_fat):
-        """Calcula o FC para um item usando os dados hist√≥ricos (metas do m√™s/ano de faturamento).
+        """Calcula o FC para um item usando os dados histÛricos (metas do mÍs/ano de faturamento).
 
         historic_data: dict retornado por _load_historic_files
-        mes_fat, ano_fat: usado para qualquer agrega√ß√£o temporal necess√°ria (pode ser None)
+        mes_fat, ano_fat: usado para qualquer agregaÁ„o temporal necess·ria (pode ser None)
         Retorna um float representando o FC (entre 0 e cap_fc).
         """
         try:
-            # Simplifica√ß√£o: replicar a l√≥gica de _calcular_fc_para_item mas usando os DataFrames hist√≥ricos
+            # SimplificaÁ„o: replicar a lÛgica de _calcular_fc_para_item mas usando os DataFrames histÛricos
             # Extrair pesos
             pesos_df = self.data.get('PESOS_METAS', pd.DataFrame())
             if pesos_df.empty:
@@ -1444,35 +1444,35 @@ class CalculoComissao:
             pesos = pesos.iloc[0]
 
             fc_total = 0.0
-            # Para cada tipo_meta semelhante ao m√©todo principal, buscar valores hist√≥ricos
+            # Para cada tipo_meta semelhante ao mÈtodo principal, buscar valores histÛricos
             metas_config = {
-                'faturamento_linha': ('faturamento_linha', (item_faturado.get('Neg√≥cio'), item_faturado.get('Tipo de Mercadoria'))),
-                'conversao_linha': ('conversao_linha', (item_faturado.get('Neg√≥cio'), item_faturado.get('Tipo de Mercadoria'))),
+                'faturamento_linha': ('faturamento_linha', (item_faturado.get('NegÛcio'), item_faturado.get('Tipo de Mercadoria'))),
+                'conversao_linha': ('conversao_linha', (item_faturado.get('NegÛcio'), item_faturado.get('Tipo de Mercadoria'))),
                 'faturamento_individual': ('faturamento_individual', nome_colab),
                 'conversao_individual': ('conversao_individual', nome_colab),
-                'rentabilidade': ('rentabilidade', (item_faturado.get('Neg√≥cio'), item_faturado.get('Grupo'), item_faturado.get('Subgrupo'), item_faturado.get('Tipo de Mercadoria'))),
-                # incluir reten√ß√£o e metas por fornecedor no c√°lculo retroativo
-                'retencao_clientes': ('retencao_clientes', (item_faturado.get('Neg√≥cio'),)),
-                'meta_fornecedor_1': ('meta_fornecedor_1', (item_faturado.get('Neg√≥cio'), 1)),
-                'meta_fornecedor_2': ('meta_fornecedor_2', (item_faturado.get('Neg√≥cio'), 2))
+                'rentabilidade': ('rentabilidade', (item_faturado.get('NegÛcio'), item_faturado.get('Grupo'), item_faturado.get('Subgrupo'), item_faturado.get('Tipo de Mercadoria'))),
+                # incluir retenÁ„o e metas por fornecedor no c·lculo retroativo
+                'retencao_clientes': ('retencao_clientes', (item_faturado.get('NegÛcio'),)),
+                'meta_fornecedor_1': ('meta_fornecedor_1', (item_faturado.get('NegÛcio'), 1)),
+                'meta_fornecedor_2': ('meta_fornecedor_2', (item_faturado.get('NegÛcio'), 2))
             }
 
-            # helper local para pegar realizado/historical meta usando arquivos hist√≥ricos carregados
+            # helper local para pegar realizado/historical meta usando arquivos histÛricos carregados
             def _get_realizado_historico(key, chave):
                 try:
                     if key == 'faturamento_linha':
                         dff = historic_data.get('FATURADOS', pd.DataFrame())
                         if dff.empty:
                             return float(self.realizado['faturamento_linha'].get(chave[0], 0)) if hasattr(self, 'realizado') else 0.0
-                        # somar Valor Realizado at√© o m√™s mes_fat (assumimos que Dt Emiss√£o existe)
-                        if 'Dt Emiss√£o' in dff.columns:
-                            df_sel = dff[dff['Fabricante'].notna() | dff['Neg√≥cio'].notna()]
+                        # somar Valor Realizado atÈ o mÍs mes_fat (assumimos que Dt Emiss„o existe)
+                        if 'Dt Emiss„o' in dff.columns:
+                            df_sel = dff[dff['Fabricante'].notna() | dff['NegÛcio'].notna()]
                             # filtrar por linha
-                            dfl = dff[dff['Neg√≥cio'] == chave[0]]
+                            dfl = dff[dff['NegÛcio'] == chave[0]]
                             if dfl.empty:
                                 return 0.0
                             if mes_fat:
-                                dfl['mes'] = pd.to_datetime(dfl['Dt Emiss√£o']).dt.month
+                                dfl['mes'] = pd.to_datetime(dfl['Dt Emiss„o']).dt.month
                                 fatur = dfl[dfl['mes'] <= int(mes_fat)]['Valor Realizado'].sum()
                             else:
                                 fatur = dfl['Valor Realizado'].sum()
@@ -1486,21 +1486,21 @@ class CalculoComissao:
                         dfp = dff[dff['Consultor Interno'] == chave]
                         if dfp.empty:
                             return 0.0
-                        if 'Dt Emiss√£o' in dfp.columns and mes_fat:
-                            dfp['mes'] = pd.to_datetime(dfp['Dt Emiss√£o']).dt.month
+                        if 'Dt Emiss„o' in dfp.columns and mes_fat:
+                            dfp['mes'] = pd.to_datetime(dfp['Dt Emiss„o']).dt.month
                             return float(dfp[dfp['mes'] <= int(mes_fat)]['Valor Realizado'].sum())
                         return float(dfp['Valor Realizado'].sum())
                     if key == 'conversao_linha':
                         dconv = historic_data.get('CONVERSOES', pd.DataFrame())
                         if dconv.empty:
                             return float(self.realizado['conversao_linha'].get(chave[0], 0)) if hasattr(self, 'realizado') else 0.0
-                        dfl = dconv[dconv['Neg√≥cio'] == chave[0]]
+                        dfl = dconv[dconv['NegÛcio'] == chave[0]]
                         if dfl.empty:
                             return 0.0
-                        if 'Dt Emiss√£o' in dfl.columns and mes_fat:
-                            dfl['mes'] = pd.to_datetime(dfl['Dt Emiss√£o']).dt.month
-                            return float(dfl[dfl['mes'] <= int(mes_fat)]['Valor Or√ßado'].sum())
-                        return float(dfl['Valor Or√ßado'].sum())
+                        if 'Dt Emiss„o' in dfl.columns and mes_fat:
+                            dfl['mes'] = pd.to_datetime(dfl['Dt Emiss„o']).dt.month
+                            return float(dfl[dfl['mes'] <= int(mes_fat)]['Valor OrÁado'].sum())
+                        return float(dfl['Valor OrÁado'].sum())
                     if key == 'conversao_individual':
                         dconv = historic_data.get('CONVERSOES', pd.DataFrame())
                         if dconv.empty:
@@ -1508,10 +1508,10 @@ class CalculoComissao:
                         dfl = dconv[dconv['Consultor Interno'] == chave]
                         if dfl.empty:
                             return 0.0
-                        if 'Dt Emiss√£o' in dfl.columns and mes_fat:
-                            dfl['mes'] = pd.to_datetime(dfl['Dt Emiss√£o']).dt.month
-                            return float(dfl[dfl['mes'] <= int(mes_fat)]['Valor Or√ßado'].sum())
-                        return float(dfl['Valor Or√ßado'].sum())
+                        if 'Dt Emiss„o' in dfl.columns and mes_fat:
+                            dfl['mes'] = pd.to_datetime(dfl['Dt Emiss„o']).dt.month
+                            return float(dfl[dfl['mes'] <= int(mes_fat)]['Valor OrÁado'].sum())
+                        return float(dfl['Valor OrÁado'].sum())
                     if key == 'rentabilidade':
                         dr = historic_data.get('RENTABILIDADE_REALIZADA', pd.DataFrame())
                         if dr.empty:
@@ -1528,7 +1528,7 @@ class CalculoComissao:
                 if peso == 0:
                     continue
                 realizado = _get_realizado_historico(realizado_key, meta_chave)
-                # buscar meta hist√≥rica (simplifica√ß√£o: tentamos nas tabelas de regras carregadas)
+                # buscar meta histÛrica (simplificaÁ„o: tentamos nas tabelas de regras carregadas)
                 meta = None
                 try:
                     if realizado_key in ['faturamento_linha', 'conversao_linha']:
@@ -1565,10 +1565,10 @@ class CalculoComissao:
                 fc_total += componente_fc
 
             cap_fc = float(self.params.get('cap_fc_max', 1.0))
-            # --- Reten√ß√£o de clientes (retroativo) ---
+            # --- RetenÁ„o de clientes (retroativo) ---
             try:
                 if cargo_colab == 'Gerente Linha':
-                    # determinar linhas do gerente a partir das atribui√ß√µes atuais
+                    # determinar linhas do gerente a partir das atribuiÁıes atuais
                     df_atr = self.data.get('ATRIBUICOES', pd.DataFrame())
                     linhas_do_gerente = df_atr[df_atr['colaborador'] == nome_colab]['linha'].dropna().unique() if not df_atr.empty else []
                     if len(linhas_do_gerente) > 0:
@@ -1600,8 +1600,8 @@ class CalculoComissao:
                                 fc_total += componente_fc_ret
                                 self.auditoria_fc.append({
                                     'colaborador': nome_colab, 'cargo': cargo_colab,
-                                    'cod_produto': item_faturado.get('C√≥digo Produto', None),
-                                    'linha_item': item_faturado.get('Neg√≥cio', None),
+                                    'cod_produto': item_faturado.get('CÛdigo Produto', None),
+                                    'linha_item': item_faturado.get('NegÛcio', None),
                                     'tipo_meta': 'retencao_clientes', 'peso': peso_ret,
                                     'realizado': clientes_atual, 'meta': clientes_ant,
                                     'atingimento': taxa_retencao, 'atingimento_cap': atingimento_cap,
@@ -1614,7 +1614,7 @@ class CalculoComissao:
             try:
                 metas_fornecedores_df = historic_data.get('METAS_FORNECEDORES', pd.DataFrame())
                 faturados_hist = historic_data.get('FATURADOS', pd.DataFrame())
-                linha_do_item = item_faturado.get('Neg√≥cio')
+                linha_do_item = item_faturado.get('NegÛcio')
                 if not metas_fornecedores_df.empty and linha_do_item is not None:
                     metas_da_linha = metas_fornecedores_df[metas_fornecedores_df['linha'] == linha_do_item]
                     fornecedores = metas_da_linha.to_dict('records') if not metas_da_linha.empty else []
@@ -1630,13 +1630,13 @@ class CalculoComissao:
                         except Exception:
                             meta_ytd = 0.0
 
-                        # calcular faturamento realizado YTD para este fornecedor a partir dos hist√≥ricos (sem convers√£o de moeda)
+                        # calcular faturamento realizado YTD para este fornecedor a partir dos histÛricos (sem convers„o de moeda)
                         faturamento_realizado_ytd = 0.0
                         if not faturados_hist.empty and 'Fabricante' in faturados_hist.columns:
                             dff = faturados_hist[faturados_hist['Fabricante'] == fornecedor_nome].copy()
                             if not dff.empty:
-                                if 'Dt Emiss√£o' in dff.columns and mes_apur:
-                                    dff['mes'] = pd.to_datetime(dff['Dt Emiss√£o']).dt.month
+                                if 'Dt Emiss„o' in dff.columns and mes_apur:
+                                    dff['mes'] = pd.to_datetime(dff['Dt Emiss„o']).dt.month
                                     faturamento_realizado_ytd = float(dff[dff['mes'] <= mes_apur]['Valor Realizado'].sum())
                                 else:
                                     faturamento_realizado_ytd = float(dff['Valor Realizado'].sum())
@@ -1662,7 +1662,7 @@ class CalculoComissao:
                         # auditoria
                         self.auditoria_fc.append({
                             'colaborador': nome_colab, 'cargo': cargo_colab,
-                            'cod_produto': item_faturado.get('C√≥digo Produto', None),
+                            'cod_produto': item_faturado.get('CÛdigo Produto', None),
                             'linha_item': linha_do_item,
                             'tipo_meta': peso_col_name, 'peso': peso_fornecedor,
                             'realizado': faturamento_realizado_ytd, 'meta': meta_ytd,
@@ -1677,18 +1677,18 @@ class CalculoComissao:
             return 1.0
 
     def _calcular_comissoes(self):
-        """Itera sobre os itens faturados, calcula o FC para cada um e a comiss√£o final."""
+        """Itera sobre os itens faturados, calcula o FC para cada um e a comiss„o final."""
         comissoes_calculadas = []
         self.auditoria_fc = [] 
         df_faturados = self.data['FATURADOS']
         df_atribuicoes = self.data['ATRIBUICOES']
         df_colabs_com_cargos = self.data['COLABORADORES']
 
-        # Pre-filtra atribui√ß√µes de gest√£o para otimiza√ß√£o
-        cargos_gestao = df_colabs_com_cargos[df_colabs_com_cargos['tipo_cargo'] == 'Gest√£o']['cargo'].unique()
+        # Pre-filtra atribuiÁıes de gest„o para otimizaÁ„o
+        cargos_gestao = df_colabs_com_cargos[df_colabs_com_cargos['tipo_cargo'] == 'Gest„o']['cargo'].unique()
         df_atribuicoes_gestao = df_atribuicoes[df_atribuicoes['cargo'].isin(cargos_gestao)]
 
-        # --- Detec√ß√£o de Cross-Selling por Processo (pr√©-scan) ---
+        # --- DetecÁ„o de Cross-Selling por Processo (prÈ-scan) ---
         # Estrutura: self.cross_selling_decisions[processo] = {is_cross:bool, consultor:str, linha:str, taxa:float, decision:'A'|'B'}
         self.cross_selling_decisions = {}
         try:
@@ -1719,7 +1719,7 @@ class CalculoComissao:
                     if gerente_padrao is None:
                         gerente_padrao = alias_map_lower.get(raw_norm.lower(), raw_norm)
 
-                    # Verificar se √© Consultor Externo
+                    # Verificar se È Consultor Externo
                     # matching case-insensitive against coluna 'nome_colaborador'
                     try:
                         mask_col = df_colabs_com_cargos['nome_colaborador'].astype(str).str.strip().str.lower() == str(gerente_padrao).strip().lower()
@@ -1735,18 +1735,18 @@ class CalculoComissao:
                         continue
 
                     # Determinar a linha do processo (usar a primeira linha encontrada)
-                    linhas_no_processo = grupo['Neg√≥cio'].dropna().unique().tolist()
+                    linhas_no_processo = grupo['NegÛcio'].dropna().unique().tolist()
                     if not linhas_no_processo:
                         continue
                     linha_do_processo = linhas_no_processo[0]
 
-                    # Verificar se o consultor possui atribui√ß√µes para esta linha
+                    # Verificar se o consultor possui atribuiÁıes para esta linha
                     possui_atr = False
                     if not df_atribuicoes.empty:
                         possui_atr = not df_atribuicoes[(df_atribuicoes['colaborador'] == gerente_padrao) & (df_atribuicoes['linha'] == linha_do_processo)].empty
 
                     if not possui_atr:
-                        # Consultor externo n√£o possui atribui√ß√£o para esta linha -> cross-selling detectado
+                        # Consultor externo n„o possui atribuiÁ„o para esta linha -> cross-selling detectado
                         taxa = 0.0
                         try:
                             if not cross_df.empty:
@@ -1758,7 +1758,7 @@ class CalculoComissao:
                         except Exception:
                             taxa = 0.0
 
-                        # Obter decis√£o do usu√°rio (prompt) ‚Äî usar op√ß√£o default quando n√£o interativo
+                        # Obter decis„o do usu·rio (prompt) ó usar opÁ„o default quando n„o interativo
                         try:
                             decisao = self._handle_cross_selling_prompt(processo, gerente_padrao, linha_do_processo, taxa)
                         except Exception:
@@ -1773,15 +1773,15 @@ class CalculoComissao:
                             'timestamp': datetime.now().isoformat()
                         }
         except Exception as e:
-            self._log_validacao('AVISO', f'Erro na detec√ß√£o de cross-selling: {e}', {})
+            self._log_validacao('AVISO', f'Erro na detecÁ„o de cross-selling: {e}', {})
 
         for _, item_faturado in df_faturados.iterrows():
             contexto_item = {
-                'linha': item_faturado['Neg√≥cio'], 'grupo': item_faturado['Grupo'],
+                'linha': item_faturado['NegÛcio'], 'grupo': item_faturado['Grupo'],
                 'subgrupo': item_faturado['Subgrupo'], 'tipo_mercadoria': item_faturado['Tipo de Mercadoria']
             }
             
-            # 1. Obter time de GEST√ÉO a partir das ATRIBUICOES
+            # 1. Obter time de GEST√O a partir das ATRIBUICOES
             atribuidos_gestao = df_atribuicoes_gestao[
                 (df_atribuicoes_gestao['linha'] == contexto_item['linha']) &
                 (df_atribuicoes_gestao['grupo'] == contexto_item['grupo']) &
@@ -1811,11 +1811,11 @@ class CalculoComissao:
             processo_atual = item_faturado.get('Processo') if 'Processo' in item_faturado.index else None
             cs_info = self.cross_selling_decisions.get(processo_atual, None)
 
-            # Se for cross-selling, gerar comiss√£o especial para o consultor externo
+            # Se for cross-selling, gerar comiss„o especial para o consultor externo
             if cs_info and cs_info.get('is_cross'):
                 consultor_externo = cs_info.get('consultor')
                 taxa_cs = float(cs_info.get('taxa', 0.0)) / 100.0
-                # Para cada item, calcular comiss√£o especial e adicion√°-la como uma linha distinta
+                # Para cada item, calcular comiss„o especial e adicion·-la como uma linha distinta
                 try:
                     if taxa_cs and taxa_cs > 0:
                         comissao_cs = item_faturado['Valor Realizado'] * taxa_cs
@@ -1829,10 +1829,10 @@ class CalculoComissao:
                             'id_colaborador': id_col,
                             'nome_colaborador': consultor_externo,
                             'cargo': 'Consultor Externo',
-                            'cod_produto': item_faturado.get('C√≥digo Produto'),
-                            'descricao_produto': item_faturado.get('Descri√ß√£o Produto'),
+                            'cod_produto': item_faturado.get('CÛdigo Produto'),
+                            'descricao_produto': item_faturado.get('DescriÁ„o Produto'),
                             'processo': processo_atual,
-                            'linha': item_faturado.get('Neg√≥cio'),
+                            'linha': item_faturado.get('NegÛcio'),
                             'grupo': item_faturado.get('Grupo'),
                             'subgrupo': item_faturado.get('Subgrupo'),
                             'tipo_mercadoria': item_faturado.get('Tipo de Mercadoria'),
@@ -1848,16 +1848,16 @@ class CalculoComissao:
                     pass
 
             if colaboradores_para_comissionar.empty:
-                self._log_validacao('AVISO', "Nenhum colaborador (gest√£o ou operacional) encontrado para o item.", dict(item_faturado))
+                self._log_validacao('AVISO', "Nenhum colaborador (gest„o ou operacional) encontrado para o item.", dict(item_faturado))
                 continue
 
             for _, atribuicao in colaboradores_para_comissionar.iterrows():
                 colab_nome = atribuicao['colaborador']
                 colab_cargo = atribuicao['cargo']
                 
-                # Se este colaborador for o Consultor Externo removido na op√ß√£o B, pular
+                # Se este colaborador for o Consultor Externo removido na opÁ„o B, pular
                 if cs_info and cs_info.get('is_cross') and cs_info.get('decision') == 'B':
-                    # op√ß√£o B: o Consultor Externo √© removido do c√°lculo normal
+                    # opÁ„o B: o Consultor Externo È removido do c·lculo normal
                     if colab_nome == cs_info.get('consultor'):
                         continue
 
@@ -1869,7 +1869,7 @@ class CalculoComissao:
                 taxa_rateio = regra['taxa_rateio_maximo_pct'] / 100.0
                 pe = regra['fatia_cargo_pct'] / 100.0
 
-                # Se este processo tem cross-selling e a decis√£o foi A (subtrair), reduzir taxa_rateio
+                # Se este processo tem cross-selling e a decis„o foi A (subtrair), reduzir taxa_rateio
                 if cs_info and cs_info.get('is_cross') and cs_info.get('decision') == 'A':
                     # reduzir taxa em taxa_cs percentual (taxa armazenada em %)
                     taxa_reduc = float(cs_info.get('taxa', 0.0)) / 100.0
@@ -1881,7 +1881,7 @@ class CalculoComissao:
                         pass
                     taxa_rateio = max(0.0, taxa_rateio - taxa_reduc)
 
-                # Se a decis√£o for B, mantemos taxa_rateio intacta mas consultor externo j√° foi removido
+                # Se a decis„o for B, mantemos taxa_rateio intacta mas consultor externo j· foi removido
                 
                 comissao_potencial = faturamento_item * taxa_rateio * pe
                 comissao_item = comissao_potencial * fc
@@ -1889,7 +1889,7 @@ class CalculoComissao:
                 comissoes_calculadas.append({
                     'id_colaborador': df_colabs_com_cargos.loc[df_colabs_com_cargos['nome_colaborador'] == colab_nome, 'id_colaborador'].iloc[0],
                     'nome_colaborador': colab_nome, 'cargo': colab_cargo,
-                    'cod_produto': item_faturado['C√≥digo Produto'], 'descricao_produto': item_faturado['Descri√ß√£o Produto'],
+                    'cod_produto': item_faturado['CÛdigo Produto'], 'descricao_produto': item_faturado['DescriÁ„o Produto'],
                     'processo': item_faturado['Processo'], **contexto_item,
                     'faturamento_item': faturamento_item, 'taxa_rateio_aplicada': taxa_rateio,
                     'fator_correcao_fc': fc, 'percentual_elegibilidade_pe': pe,
@@ -1900,9 +1900,9 @@ class CalculoComissao:
         self.comissoes_df = pd.DataFrame(comissoes_calculadas)
 
     def _handle_cross_selling_prompt(self, processo, consultor, linha, taxa):
-        """Mostra prompt interativo no terminal para decis√£o A ou B sobre o cross-selling.
+        """Mostra prompt interativo no terminal para decis„o A ou B sobre o cross-selling.
 
-        Retorna 'A' ou 'B'. Usa cross_selling_default_option quando a entrada for vazia (modo n√£o interativo).
+        Retorna 'A' ou 'B'. Usa cross_selling_default_option quando a entrada for vazia (modo n„o interativo).
         """
         default = self.params.get('cross_selling_default_option', 'A')
         prompt = f"\n------------------------------------------------------------------\n"
@@ -1910,22 +1910,22 @@ class CalculoComissao:
         prompt += f"Processo: {processo}\n"
         prompt += f"Consultor Externo: {consultor}\n"
         prompt += f"Linha da Venda: {linha} (fora de sua carteira)\n\n"
-        prompt += f"Escolha como a comiss√£o de Cross-Selling de {taxa}% ser√° tratada:\n\n"
+        prompt += f"Escolha como a comiss„o de Cross-Selling de {taxa}% ser· tratada:\n\n"
         prompt += "(A) SUBTRAIR da Taxa de Rateio:\n"
-        prompt += "    - A comiss√£o de Cross-Selling ser√° paga ao Consultor Externo.\n"
-        prompt += f"    - A Taxa de Rateio dos itens deste processo ser√° REDUZIDA em {taxa}% para os demais colaboradores.\n\n"
+        prompt += "    - A comiss„o de Cross-Selling ser· paga ao Consultor Externo.\n"
+        prompt += f"    - A Taxa de Rateio dos itens deste processo ser· REDUZIDA em {taxa}% para os demais colaboradores.\n\n"
         prompt += "(B) PAGAR SEPARADAMENTE:\n"
-        prompt += "    - A comiss√£o de Cross-Selling ser√° paga ao Consultor Externo.\n"
-        prompt += "    - A Taxa de Rateio dos itens permanecer√° INTACTA para os demais.\n"
-        prompt += "    - O Consultor Externo ser√° REMOVIDO do c√°lculo de comiss√£o normal para este processo.\n\n"
+        prompt += "    - A comiss„o de Cross-Selling ser· paga ao Consultor Externo.\n"
+        prompt += "    - A Taxa de Rateio dos itens permanecer· INTACTA para os demais.\n"
+        prompt += "    - O Consultor Externo ser· REMOVIDO do c·lculo de comiss„o normal para este processo.\n\n"
         prompt += "Digite sua escolha (A ou B) e pressione Enter: "
 
-        # Se rodando em ambiente n√£o-interativo, usar default
+        # Se rodando em ambiente n„o-interativo, usar default
         try:
-            # Se stdin n√£o for interativo, retornar o default
+            # Se stdin n„o for interativo, retornar o default
             if not sys.stdin.isatty():
                 if getattr(self, '_logger', None):
-                    self._logger.info(f"Modo n√£o-interativo detectado ‚Äî usando op√ß√£o default de cross-selling: {default}")
+                    self._logger.info(f"Modo n„o-interativo detectado ó usando opÁ„o default de cross-selling: {default}")
                 return default
         except Exception:
             pass
@@ -1942,27 +1942,27 @@ class CalculoComissao:
             if escolha in ('A', 'B'):
                 return escolha
             else:
-                print("Entrada inv√°lida. Digite 'A' ou 'B'.")
+                print("Entrada inv·lida. Digite 'A' ou 'B'.")
     
     def _gerar_detalhamento_pdf(self):
-        """Gera um PDF detalhando o c√°lculo de cada comiss√£o."""
+        """Gera um PDF detalhando o c·lculo de cada comiss„o."""
         if not REPORTLAB_DISPONIVEL:
             return
 
-        # Importa explicitamente as depend√™ncias do reportlab aqui para garantir que estejam dispon√≠veis
+        # Importa explicitamente as dependÍncias do reportlab aqui para garantir que estejam disponÌveis
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
         from reportlab.lib.styles import getSampleStyleSheet
 
         df_comissoes = self.comissoes_df
-        # Se n√£o existirem itens faturados no m√™s selecionado, garantir que as comiss√µes
-        # de faturamento sejam zero e registrar um aviso na planilha de sa√≠da.
+        # Se n„o existirem itens faturados no mÍs selecionado, garantir que as comissıes
+        # de faturamento sejam zero e registrar um aviso na planilha de saÌda.
         try:
             df_faturados = self.data.get('FATURADOS', pd.DataFrame())
-            # Detectar se h√° linhas com 'Dt Emiss√£o' no m√™s/ano atual (quando coluna presente)
+            # Detectar se h· linhas com 'Dt Emiss„o' no mÍs/ano atual (quando coluna presente)
             tem_faturamento_no_mes = True
-            if 'Dt Emiss√£o' in df_faturados.columns and not df_faturados.empty:
+            if 'Dt Emiss„o' in df_faturados.columns and not df_faturados.empty:
                 try:
-                    # usar o par√¢metro mes/ano passado via self.params se dispon√≠vel
+                    # usar o par‚metro mes/ano passado via self.params se disponÌvel
                     raw_mes = self.params.get('mes_apuracao') if isinstance(self.params, dict) else None
                     raw_ano = self.params.get('ano_apuracao') if isinstance(self.params, dict) else None
                     mes_param = int(raw_mes) if raw_mes not in (None, '', False) else None
@@ -1972,7 +1972,7 @@ class CalculoComissao:
                     ano_param = None
 
                 if mes_param and ano_param:
-                    df_dates = pd.to_datetime(df_faturados['Dt Emiss√£o'], errors='coerce')
+                    df_dates = pd.to_datetime(df_faturados['Dt Emiss„o'], errors='coerce')
                     df_faturados_mes = df_faturados[(df_dates.dt.month == mes_param) & (df_dates.dt.year == ano_param)]
                     tem_faturamento_no_mes = not df_faturados_mes.empty
                 else:
@@ -1981,40 +1981,40 @@ class CalculoComissao:
                 tem_faturamento_no_mes = False
 
             if not tem_faturamento_no_mes:
-                # Zeroar comiss√µes de faturamento
+                # Zeroar comissıes de faturamento
                 if not df_comissoes.empty:
                     df_comissoes['comissao_calculada'] = 0.0
                 # Adicionar aviso de falta de faturamento
-                self._log_validacao('AVISO', 'Nenhum item faturado encontrado para o m√™s selecionado; comiss√µes de faturamento zeradas.', {})
-                # Inserir linha de aviso quando for gerar o Excel (mais abaixo) ‚Äî marcar via atributo
+                self._log_validacao('AVISO', 'Nenhum item faturado encontrado para o mÍs selecionado; comissıes de faturamento zeradas.', {})
+                # Inserir linha de aviso quando for gerar o Excel (mais abaixo) ó marcar via atributo
                 self._no_faturamento_mes = True
             else:
                 self._no_faturamento_mes = False
         except Exception:
-            # se algo falhar, n√£o impedir a gera√ß√£o, apenas continuar
+            # se algo falhar, n„o impedir a geraÁ„o, apenas continuar
             self._no_faturamento_mes = False
         df_auditoria = pd.DataFrame(self.auditoria_fc)
-        # --- Limpieza para apresenta√ß√£o: remover metas com peso 0 e deduplicar por colaborador/meta/linha ---
+        # --- Limpieza para apresentaÁ„o: remover metas com peso 0 e deduplicar por colaborador/meta/linha ---
         if not df_auditoria.empty:
-            # Normalizar coluna 'peso' para float quando poss√≠vel
+            # Normalizar coluna 'peso' para float quando possÌvel
             if 'peso' in df_auditoria.columns:
                 df_auditoria['peso'] = pd.to_numeric(df_auditoria['peso'], errors='coerce').fillna(0.0)
             else:
                 df_auditoria['peso'] = 0.0
 
-            # Remover metas cujo peso √© zero ‚Äî n√£o queremos mostr√°-las no relat√≥rio de auditoria
+            # Remover metas cujo peso È zero ó n„o queremos mostr·-las no relatÛrio de auditoria
             df_auditoria = df_auditoria[df_auditoria['peso'] != 0.0].copy()
 
-            # Deduplicar entradas: manter apenas uma ocorr√™ncia por (colaborador, tipo_meta, linha_item).
-            # Isto preserva o caso em que um colaborador participa de m√∫ltiplas linhas diferentes
+            # Deduplicar entradas: manter apenas uma ocorrÍncia por (colaborador, tipo_meta, linha_item).
+            # Isto preserva o caso em que um colaborador participa de m˙ltiplas linhas diferentes
             dedup_subset = [c for c in ['colaborador', 'tipo_meta', 'linha_item'] if c in df_auditoria.columns]
             if dedup_subset:
                 df_auditoria = df_auditoria.drop_duplicates(subset=dedup_subset, keep='last').reset_index(drop=True)
 
-        # --- Limpeza local apenas para apresenta√ß√£o no PDF ---
-        # Evita p√°ginas duplicadas no PDF quando o DataFrame de comiss√µes
-        # cont√©m linhas repetidas (isso n√£o altera os dados usados nos
-        # c√°lculos ou na gera√ß√£o do Excel)
+        # --- Limpeza local apenas para apresentaÁ„o no PDF ---
+        # Evita p·ginas duplicadas no PDF quando o DataFrame de comissıes
+        # contÈm linhas repetidas (isso n„o altera os dados usados nos
+        # c·lculos ou na geraÁ„o do Excel)
         if not df_comissoes.empty:
             subset_cols = [
                 'nome_colaborador', 'cod_produto', 'processo', 'descricao_produto', 'cargo',
@@ -2022,14 +2022,14 @@ class CalculoComissao:
                 'faturamento_item', 'taxa_rateio_aplicada', 'percentual_elegibilidade_pe', 'fator_correcao_fc',
                 'comissao_potencial_maxima', 'comissao_calculada'
             ]
-            # remove duplicatas aparentes s√≥ para o relat√≥rio
+            # remove duplicatas aparentes sÛ para o relatÛrio
             existing_cols = [c for c in subset_cols if c in df_comissoes.columns]
             df_comissoes = df_comissoes.drop_duplicates(subset=existing_cols)
 
         if df_comissoes.empty:
             return
 
-        # Seguran√ßa: se houver muitas comiss√µes, gerar o PDF apenas com uma amostra
+        # SeguranÁa: se houver muitas comissıes, gerar o PDF apenas com uma amostra
         MAX_PAGES_PDF = int(self.params.get('max_pages_pdf', 200)) if isinstance(self.params.get('max_pages_pdf', None), (int, float, str)) else 200
         if len(df_comissoes) > MAX_PAGES_PDF:
             # Amostragem estratificada simples por (linha, cargo)
@@ -2037,7 +2037,7 @@ class CalculoComissao:
                 sample_size = int(self.params.get('sample_pages_pdf', 100)) if self.params.get('sample_pages_pdf') else 100
             except Exception:
                 sample_size = 100
-            # Construir pequena amostra para relat√≥rio
+            # Construir pequena amostra para relatÛrio
             grp = df_comissoes.groupby(['linha', 'cargo'], dropna=False)
             samples = []
             for _, g in grp:
@@ -2056,7 +2056,7 @@ class CalculoComissao:
         story = []
         
         for index, comissao in df_comissoes.iterrows():
-            story.append(Paragraph("<b>Detalhamento do C√°lculo de Comiss√£o</b>", styles['h1']))
+            story.append(Paragraph("<b>Detalhamento do C·lculo de Comiss„o</b>", styles['h1']))
             story.append(Spacer(1, 12))
             
             story.append(Paragraph(f"<b>Processo:</b> {comissao['processo']}", styles['Normal']))
@@ -2065,13 +2065,13 @@ class CalculoComissao:
             story.append(Paragraph(f"<b>Faturamento do Item:</b> R$ {comissao['faturamento_item']:.2f}", styles['Normal']))
             story.append(Spacer(1, 24))
             
-            story.append(Paragraph("<b>Passo 1: Aplica√ß√£o da Regra de Comiss√£o</b>", styles['h2']))
+            story.append(Paragraph("<b>Passo 1: AplicaÁ„o da Regra de Comiss„o</b>", styles['h2']))
             story.append(Paragraph(f"Para o contexto (Linha: {comissao['linha']}, ..., Cargo: {comissao['cargo']}), a regra encontrada foi:", styles['Normal']))
             story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- Taxa de Rateio (taxa_rateio_aplicada): {comissao['taxa_rateio_aplicada']:.2%}", styles['Normal']))
             story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- Percentual de Elegibilidade (PE): {comissao['percentual_elegibilidade_pe']:.2%}", styles['Normal']))
             story.append(Spacer(1, 24))
 
-            story.append(Paragraph("<b>Passo 2: C√°lculo do Fator de Corre√ß√£o (FC)</b>", styles['h2']))
+            story.append(Paragraph("<b>Passo 2: C·lculo do Fator de CorreÁ„o (FC)</b>", styles['h2']))
             
             # Selecionar componentes de auditoria relevantes para este colaborador/item.
             # Se a coluna 'cod_produto' existir (legado), ainda usamos-a para maior especificidade.
@@ -2081,7 +2081,7 @@ class CalculoComissao:
                     (df_auditoria['cod_produto'] == comissao['cod_produto'])
                 ]
             elif 'linha_item' in df_auditoria.columns and 'linha' in comissao.index:
-                # Nova regra: FC aplica-se √† linha como um todo ‚Äî match por colaborador + linha
+                # Nova regra: FC aplica-se ‡ linha como um todo ó match por colaborador + linha
                 auditoria_item_colab = df_auditoria[
                     (df_auditoria['colaborador'] == comissao['nome_colaborador']) &
                     (df_auditoria['linha_item'] == comissao['linha'])
@@ -2091,23 +2091,23 @@ class CalculoComissao:
                 auditoria_item_colab = df_auditoria[df_auditoria['colaborador'] == comissao['nome_colaborador']]
 
             if auditoria_item_colab.empty:
-                story.append(Paragraph("Nenhum componente de FC aplic√°vel para este cargo/item.", styles['Normal']))
+                story.append(Paragraph("Nenhum componente de FC aplic·vel para este cargo/item.", styles['Normal']))
             else:
-                # Ordem e deduplica√ß√£o por tipo_meta para evitar repeti√ß√µes no PDF
+                # Ordem e deduplicaÁ„o por tipo_meta para evitar repetiÁıes no PDF
                 if 'tipo_meta' in auditoria_item_colab.columns:
                     auditoria_item_colab = auditoria_item_colab.sort_values(['tipo_meta']).drop_duplicates(subset=['tipo_meta'], keep='last')
 
                 for _, aud in auditoria_item_colab.iterrows():
-                    # Formata valores conforme o tipo de m√©trica para melhor leitura
+                    # Formata valores conforme o tipo de mÈtrica para melhor leitura
                     tipo = str(aud.get('tipo_meta', ''))
-                    # Meta e realizado podem ser None/NaN; tratar com seguran√ßa
+                    # Meta e realizado podem ser None/NaN; tratar com seguranÁa
                     meta_val = aud.get('meta', None)
                     realizado_val = aud.get('realizado', None)
 
                     if pd.isna(meta_val):
                         meta_str = 'N/A'
                     else:
-                        # Mostrar meta como valor monet√°rio para faturamento/convers√£o
+                        # Mostrar meta como valor monet·rio para faturamento/convers„o
                         if 'faturamento' in tipo or 'conversao' in tipo:
                             try:
                                 meta_str = f"R$ {float(meta_val):,.2f}"
@@ -2138,19 +2138,19 @@ class CalculoComissao:
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- Valor da Meta: {meta_str}", styles['Normal']))
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- Atingimento: {atingimento:.2%}", styles['Normal']))
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- Atingimento (com cap): {atingimento_cap:.2%}", styles['Normal']))
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- <b>C√°lculo do Componente FC:</b> {atingimento_cap:.2%} * {peso:.2%} = <b>{componente_fc:.4f}</b>", styles['Normal']))
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- <b>C·lculo do Componente FC:</b> {atingimento_cap:.2%} * {peso:.2%} = <b>{componente_fc:.4f}</b>", styles['Normal']))
                     story.append(Spacer(1, 6))
 
             story.append(Paragraph(f"<b>FC Total para este Item:</b> {comissao['fator_correcao_fc']:.4f}", styles['h3']))
             story.append(Spacer(1, 24))
 
-            story.append(Paragraph("<b>Passo 3: C√°lculo Final da Comiss√£o</b>", styles['h2']))
+            story.append(Paragraph("<b>Passo 3: C·lculo Final da Comiss„o</b>", styles['h2']))
             formula = "Faturamento * Taxa de Rateio * PE * FC"
             calculo = f"R$ {comissao['faturamento_item']:.2f} * {comissao['taxa_rateio_aplicada']:.2%} * {comissao['percentual_elegibilidade_pe']:.2%} * {comissao['fator_correcao_fc']:.4f}"
-            story.append(Paragraph(f"<b>Potencial M√°ximo (FC=1.0): R$ {comissao['comissao_potencial_maxima']:.2f}</b>", styles['Normal']))
-            story.append(Paragraph(f"<b>F√≥rmula Efetiva:</b> {formula}", styles['Normal']))
-            story.append(Paragraph(f"<b>C√°lculo Efetivo:</b> {calculo}", styles['Normal']))
-            story.append(Paragraph(f"<b>Comiss√£o Final (Efetiva) para este Item: R$ {comissao['comissao_calculada']:.2f}</b>", styles['h3']))
+            story.append(Paragraph(f"<b>Potencial M·ximo (FC=1.0): R$ {comissao['comissao_potencial_maxima']:.2f}</b>", styles['Normal']))
+            story.append(Paragraph(f"<b>FÛrmula Efetiva:</b> {formula}", styles['Normal']))
+            story.append(Paragraph(f"<b>C·lculo Efetivo:</b> {calculo}", styles['Normal']))
+            story.append(Paragraph(f"<b>Comiss„o Final (Efetiva) para este Item: R$ {comissao['comissao_calculada']:.2f}</b>", styles['h3']))
             
             story.append(PageBreak())
         
@@ -2158,9 +2158,9 @@ class CalculoComissao:
             doc.build(story)
             print(f"PDF de detalhamento gerado: {nome_arquivo_pdf}")
         except KeyboardInterrupt:
-            # N√£o propagar interrup√ß√£o do usu√°rio; registrar e seguir
-            self._log_validacao('AVISO', 'Gera√ß√£o de PDF interrompida pelo usu√°rio (KeyboardInterrupt). PDF n√£o gerado.', {})
-            print("Gera√ß√£o de PDF interrompida pelo usu√°rio. PDF n√£o gerado.")
+            # N„o propagar interrupÁ„o do usu·rio; registrar e seguir
+            self._log_validacao('AVISO', 'GeraÁ„o de PDF interrompida pelo usu·rio (KeyboardInterrupt). PDF n„o gerado.', {})
+            print("GeraÁ„o de PDF interrompida pelo usu·rio. PDF n„o gerado.")
         except BaseException as e:
             # Captura falhas do reportlab (layout, encoding, etc.) e registra sem interromper o fluxo
             self._log_validacao('AVISO', f'Falha ao gerar PDF de detalhamento: {e}', {})
@@ -2170,12 +2170,12 @@ class CalculoComissao:
     def _gerar_saida(self):
         """Gera o arquivo Excel com todas as abas de resultado e o PDF de detalhamento."""
         if not hasattr(self, 'comissoes_df') or self.comissoes_df.empty:
-            print("Nenhuma comiss√£o foi calculada. O arquivo de sa√≠da n√£o ser√° gerado.")
-            self._log_validacao("ERRO", "C√°lculo final vazio", "Nenhuma comiss√£o p√¥de ser calculada com base nos dados.")
+            print("Nenhuma comiss„o foi calculada. O arquivo de saÌda n„o ser· gerado.")
+            self._log_validacao("ERRO", "C·lculo final vazio", "Nenhuma comiss„o pÙde ser calculada com base nos dados.")
             self.comissoes_df = pd.DataFrame()
 
         df_comissoes = self.comissoes_df
-        # Reordenar colunas para melhor visualiza√ß√£o
+        # Reordenar colunas para melhor visualizaÁ„o
         if not df_comissoes.empty:
             colunas_principais = ['id_colaborador', 'nome_colaborador', 'cargo', 'processo', 'cod_produto', 'descricao_produto']
             colunas_contexto = ['linha', 'grupo', 'subgrupo', 'tipo_mercadoria']
@@ -2185,7 +2185,7 @@ class CalculoComissao:
             df_comissoes = df_comissoes[ordem_final]
 
         # Remover do arquivo principal quaisquer colaboradores que recebem por recebimento.
-        # Construir sets a partir de COMISSOES_RECEBIMENTO (quando presente) e tamb√©m
+        # Construir sets a partir de COMISSOES_RECEBIMENTO (quando presente) e tambÈm
         # incluir sempre os colaboradores detectados em self.recebe_por_recebimento.
         try:
             ids_to_remove = set()
@@ -2202,7 +2202,7 @@ class CalculoComissao:
                         nomes_to_remove.add(str(nome).strip().lower())
 
             # Incluir colaboradores identificados para receber por recebimento, mesmo que
-            # n√£o existam linhas em COMISSOES_RECEBIMENTO (regra de neg√≥cio).
+            # n„o existam linhas em COMISSOES_RECEBIMENTO (regra de negÛcio).
             try:
                 for nome in getattr(self, 'recebe_por_recebimento', set()):
                     if not nome:
@@ -2250,26 +2250,26 @@ class CalculoComissao:
             self._log_validacao('AVISO', f'Falha ao filtrar COMISSOES_RECEBIMENTO do arquivo principal: {e}', {})
 
 
-        # Construir resumo que inclui comiss√µes por faturamento e por recebimento.
+        # Construir resumo que inclui comissıes por faturamento e por recebimento.
         # Objetivo: mostrar todos os colaboradores mesmo que recebam apenas por recebimento.
         resumo_cols = ['id_colaborador', 'nome_colaborador', 'cargo', 'comissao_total']
         df_resumo = pd.DataFrame(columns=resumo_cols)
 
-        # Sum√°rio das comiss√µes calculadas (faturamento)
+        # Sum·rio das comissıes calculadas (faturamento)
         if not df_comissoes.empty:
             res_fat = df_comissoes.groupby(['id_colaborador', 'nome_colaborador', 'cargo'])['comissao_calculada'].sum().reset_index()
             res_fat = res_fat.rename(columns={'comissao_calculada': 'comissao_total'})
         else:
             res_fat = pd.DataFrame(columns=resumo_cols)
 
-        # Sum√°rio das comiss√µes por recebimento (se existir)
+        # Sum·rio das comissıes por recebimento (se existir)
         res_rec = pd.DataFrame(columns=resumo_cols)
         if hasattr(self, 'comissoes_recebimento_df') and self.comissoes_recebimento_df is not None and not self.comissoes_recebimento_df.empty:
             try:
                 res_rec = self.comissoes_recebimento_df.groupby(['id_colaborador', 'nome_colaborador', 'cargo'])['comissao_calculada'].sum().reset_index()
                 res_rec = res_rec.rename(columns={'comissao_calculada': 'comissao_total'})
             except Exception:
-                # Em caso de diferen√ßas de colunas, tentar agrupar por nome apenas
+                # Em caso de diferenÁas de colunas, tentar agrupar por nome apenas
                 if 'nome_colaborador' in self.comissoes_recebimento_df.columns:
                     res_rec = self.comissoes_recebimento_df.groupby(['nome_colaborador'])['comissao_calculada'].sum().reset_index()
                     res_rec['id_colaborador'] = ''
@@ -2283,7 +2283,7 @@ class CalculoComissao:
         else:
             df_resumo = pd.DataFrame(columns=resumo_cols)
 
-        # Garantir que todos os colaboradores definidos em Regras (COLABORADORES) apare√ßam no resumo
+        # Garantir que todos os colaboradores definidos em Regras (COLABORADORES) apareÁam no resumo
         try:
             colabs = self.data.get('COLABORADORES') if isinstance(self.data, dict) else None
             if colabs is not None and not colabs.empty:
@@ -2297,7 +2297,7 @@ class CalculoComissao:
                         id_field = c
                     if lc in ('nome_colaborador', 'nome', 'colaborador'):
                         name_field = c
-                    if lc in ('cargo', 'role', 'fun√ß√£o', 'funcao'):
+                    if lc in ('cargo', 'role', 'funÁ„o', 'funcao'):
                         cargo_field = c
 
                 base_all = pd.DataFrame(columns=['id_colaborador', 'nome_colaborador', 'cargo'])
@@ -2316,7 +2316,7 @@ class CalculoComissao:
 
                 # Juntar com os valores calculados, garantindo zeros quando ausentes
                 df_resumo = pd.merge(base_all.drop_duplicates(subset=['id_colaborador', 'nome_colaborador']), df_resumo, on=['id_colaborador', 'nome_colaborador'], how='left')
-                # garantir que combine_first receba Series; criar s√©rie vazia quando cargo_y ausente
+                # garantir que combine_first receba Series; criar sÈrie vazia quando cargo_y ausente
                 if 'cargo_x' in df_resumo.columns:
                     if 'cargo_y' in df_resumo.columns:
                         df_resumo['cargo'] = df_resumo['cargo_x'].combine_first(df_resumo['cargo_y'])
@@ -2340,41 +2340,41 @@ class CalculoComissao:
         # --- Limpeza persistente da auditoria para escrita no Excel ---
         try:
             if not df_auditoria.empty:
-                # Normalizar coluna 'peso' para float quando poss√≠vel
+                # Normalizar coluna 'peso' para float quando possÌvel
                 if 'peso' in df_auditoria.columns:
                     df_auditoria['peso'] = pd.to_numeric(df_auditoria['peso'], errors='coerce').fillna(0.0)
                 else:
                     df_auditoria['peso'] = 0.0
 
-                # Remover metas cujo peso √© zero ‚Äî n√£o queremos armazenar essas linhas no Excel final
+                # Remover metas cujo peso È zero ó n„o queremos armazenar essas linhas no Excel final
                 before_cnt = len(df_auditoria)
                 df_auditoria = df_auditoria[df_auditoria['peso'] != 0.0].copy()
                 after_cnt = len(df_auditoria)
                 if getattr(self, '_logger', None):
                     self._logger.info(f"AUDITORIA_FC: filtradas {before_cnt - after_cnt} linhas com peso==0.0 antes de salvar no Excel")
 
-                # Deduplicar entradas: manter apenas uma ocorr√™ncia por (colaborador, tipo_meta, linha_item).
+                # Deduplicar entradas: manter apenas uma ocorrÍncia por (colaborador, tipo_meta, linha_item).
                 dedup_subset = [c for c in ['colaborador', 'tipo_meta', 'linha_item'] if c in df_auditoria.columns]
                 if dedup_subset:
                     df_auditoria = df_auditoria.drop_duplicates(subset=dedup_subset, keep='last').reset_index(drop=True)
 
-            # Remover coluna 'cod_produto' ‚Äî o FC √© v√°lido para o colaborador/linha como um todo
+            # Remover coluna 'cod_produto' ó o FC È v·lido para o colaborador/linha como um todo
             if 'cod_produto' in df_auditoria.columns:
                 df_auditoria = df_auditoria.drop(columns=['cod_produto'])
 
-            # Atualiza o estado interno para que o PDF use a vers√£o limpa da auditoria
+            # Atualiza o estado interno para que o PDF use a vers„o limpa da auditoria
             self.auditoria_fc = df_auditoria.to_dict('records') if not df_auditoria.empty else []
         except Exception as e:
-            # N√£o interromper a gera√ß√£o de sa√≠da por erro aqui; apenas registrar
+            # N„o interromper a geraÁ„o de saÌda por erro aqui; apenas registrar
             self._log_validacao('AVISO', f'Falha ao limpar AUDITORIA_FC antes de salvar: {e}', {})
 
         with pd.ExcelWriter(NOME_ARQUIVO_SAIDA, engine='openpyxl') as writer:
-            # Se sinalizado que n√£o houve faturamento no m√™s, inserir uma linha de aviso
+            # Se sinalizado que n„o houve faturamento no mÍs, inserir uma linha de aviso
             try:
                 if getattr(self, '_no_faturamento_mes', False):
                     aviso_row = {
                         'id_colaborador': '',
-                        'nome_colaborador': 'AVISO: Nenhum item faturado neste m√™s',
+                        'nome_colaborador': 'AVISO: Nenhum item faturado neste mÍs',
                         'cargo': '',
                         'processo': '',
                         'cod_produto': '',
@@ -2401,98 +2401,48 @@ class CalculoComissao:
                 if hasattr(self, 'comissoes_recebimento_df') and self.comissoes_recebimento_df is not None and not self.comissoes_recebimento_df.empty:
                     df_rec_raw = self.data.get('RECEBIMENTOS', pd.DataFrame())
                     base = self.comissoes_recebimento_df.copy()
-                    # Validar que cada processo pertence a uma √∫nica linha; se mais de uma, avisar e excluir
+                    # Validar que cada processo pertence a uma ˙nica linha; se mais de uma, avisar e excluir
                     try:
                         linhas_por_proc = base.groupby('processo')['linha'].nunique(dropna=False)
                         procs_multilinha = set(linhas_por_proc[linhas_por_proc > 1].index.tolist())
                         for p in procs_multilinha:
-                            self._log_validacao('AVISO', f'Processo com m√∫ltiplas linhas na COMISSOES_RECEBIMENTO (ignorado): {p}', {'processo': p})
+                            self._log_validacao('AVISO', f'Processo com m˙ltiplas linhas na COMISSOES_RECEBIMENTO (ignorado): {p}', {'processo': p})
                         if procs_multilinha:
                             base = base[~base['processo'].isin(procs_multilinha)]
                     except Exception:
                         pass
 
-                    # Derivar a linha do processo (√∫nica) para exibir
+                    # Derivar a linha do processo (˙nica) para exibir
                     try:
                         linha_proc_map = base.groupby('processo')['linha'].agg(lambda s: s.dropna().iloc[0] if len(s.dropna())>0 else None).to_dict()
                         base['linha_processo'] = base['processo'].map(linha_proc_map)
                     except Exception:
                         base['linha_processo'] = None
 
-                    # Anexar DATA_RECEBIMENTO por (processo, valor, sequencia) para diferenciar pagamentos repetidos
+                    # Anexar DATA_RECEBIMENTO por (processo, valor)
                     if df_rec_raw is not None and not df_rec_raw.empty and all(c in df_rec_raw.columns for c in ['PROCESSO','DATA_RECEBIMENTO','VALOR_RECEBIDO']):
                         df_r = df_rec_raw[['PROCESSO','DATA_RECEBIMENTO','VALOR_RECEBIDO']].copy()
                         df_r['PROCESSO'] = df_r['PROCESSO'].astype(str).str.strip()
-                        df_r['_seq'] = df_r.groupby(['PROCESSO','VALOR_RECEBIDO']).cumcount()
                         base['processo'] = base['processo'].astype(str).str.strip()
-                        base['_seq'] = base.groupby(['processo','faturamento_item']).cumcount()
-                        df_join = base.merge(df_r, left_on=['processo','faturamento_item','_seq'], right_on=['PROCESSO','VALOR_RECEBIDO','_seq'], how='left')
-                        for cdrop in ['PROCESSO','VALOR_RECEBIDO','_seq']:
-                            if cdrop in df_join.columns:
-                                df_join = df_join.drop(columns=[cdrop])
+                        df_join = base.merge(df_r, left_on=['processo','faturamento_item'], right_on=['PROCESSO','VALOR_RECEBIDO'], how='left')
+                        if 'PROCESSO' in df_join.columns:
+                            df_join = df_join.drop(columns=['PROCESSO'])
+                        if 'VALOR_RECEBIDO' in df_join.columns:
+                            df_join = df_join.drop(columns=['VALOR_RECEBIDO'])
                     else:
                         df_join = base.copy()
 
-                    # Agregar por processo + DATA + linha + colaborador (uma linha por pagamento/colaborador);
-                    # se houver diverg√™ncia de taxa/PE entre itens desse pagamento, detalhar por contexto e sinalizar.
-                    gb_main = [k for k in ['processo','DATA_RECEBIMENTO','linha_processo','nome_colaborador'] if k in df_join.columns]
-                    out_rows = []
-                    for keys, g in df_join.groupby(gb_main, dropna=False):
-                        try:
-                            div_rateio = g['taxa_rateio_aplicada'].nunique(dropna=False) > 1 if 'taxa_rateio_aplicada' in g.columns else False
-                            div_pe = g['percentual_elegibilidade_pe'].nunique(dropna=False) > 1 if 'percentual_elegibilidade_pe' in g.columns else False
-                            if not (div_rateio or div_pe):
-                                row = {
-                                    'processo': keys[gb_main.index('processo')] if 'processo' in gb_main else None,
-                                    'DATA_RECEBIMENTO': keys[gb_main.index('DATA_RECEBIMENTO')] if 'DATA_RECEBIMENTO' in gb_main else None,
-                                    'linha': keys[gb_main.index('linha_processo')] if 'linha_processo' in gb_main else None,
-                                    'nome_colaborador': keys[gb_main.index('nome_colaborador')] if 'nome_colaborador' in gb_main else None,
-                                    'valor_recebido_total': g['faturamento_item'].sum() if 'faturamento_item' in g.columns else 0.0,
-                                    'comissao_total': g['comissao_calculada'].sum() if 'comissao_calculada' in g.columns else 0.0,
-                                    'taxa_rateio_aplicada': (g['taxa_rateio_aplicada'].iloc[0] if 'taxa_rateio_aplicada' in g.columns and len(g)>0 else None),
-                                    'percentual_elegibilidade_pe': (g['percentual_elegibilidade_pe'].iloc[0] if 'percentual_elegibilidade_pe' in g.columns and len(g)>0 else None)
-                                }
-                                # percentual de comiss√£o para refer√™ncia
-                                try:
-                                    row['percentual_comissao'] = float(row['taxa_rateio_aplicada']) * float(row['percentual_elegibilidade_pe'])
-                                except Exception:
-                                    row['percentual_comissao'] = None
-                                out_rows.append(row)
-                            else:
-                                # detalhar por contexto (linha/grupo/subgrupo/tipo) e sinalizar diverg√™ncia
-                                inner_keys = [c for c in ['linha','grupo','subgrupo','tipo_mercadoria'] if c in g.columns]
-                                for _, gi in g.groupby(inner_keys, dropna=False):
-                                    row = {
-                                        'processo': keys[gb_main.index('processo')] if 'processo' in gb_main else None,
-                                        'DATA_RECEBIMENTO': keys[gb_main.index('DATA_RECEBIMENTO')] if 'DATA_RECEBIMENTO' in gb_main else None,
-                                        'linha': (gi['linha'].iloc[0] if 'linha' in gi.columns and len(gi)>0 else (keys[gb_main.index('linha_processo')] if 'linha_processo' in gb_main else None)),
-                                        'nome_colaborador': keys[gb_main.index('nome_colaborador')] if 'nome_colaborador' in gb_main else None,
-                                        'valor_recebido_total': gi['faturamento_item'].sum() if 'faturamento_item' in gi.columns else 0.0,
-                                        'comissao_total': gi['comissao_calculada'].sum() if 'comissao_calculada' in gi.columns else 0.0,
-                                        'taxa_rateio_aplicada': (gi['taxa_rateio_aplicada'].iloc[0] if 'taxa_rateio_aplicada' in gi.columns and len(gi)>0 else None),
-                                        'percentual_elegibilidade_pe': (gi['percentual_elegibilidade_pe'].iloc[0] if 'percentual_elegibilidade_pe' in gi.columns and len(gi)>0 else None),
-                                        'aviso_divergencia': 'Divergencia de taxa_rateio e/ou PE entre itens deste pagamento'
-                                    }
-                                    try:
-                                        row['percentual_comissao'] = float(row['taxa_rateio_aplicada']) * float(row['percentual_elegibilidade_pe'])
-                                    except Exception:
-                                        row['percentual_comissao'] = None
-                                    # incluir contexto somente quando divergente
-                                    for c in ['grupo','subgrupo','tipo_mercadoria']:
-                                        if c in gi.columns:
-                                            row[c] = gi[c].iloc[0]
-                                    out_rows.append(row)
-                        except Exception:
-                            continue
-                    df_out = pd.DataFrame(out_rows)
-                    # Garantir presen√ßa da coluna de comiss√£o
-                    try:
-                        if not df_out.empty and 'comissao_total' not in df_out.columns:
-                            df_out['comissao_total'] = 0.0
-                    except Exception:
-                        pass
+                    # Agregar por processo + DATA_RECEBIMENTO + linha_processo (uma linha por pagamento)
+                    df_out = df_join.groupby(['processo','DATA_RECEBIMENTO','linha_processo'], dropna=False).agg(
+                        valor_recebido_total=('faturamento_item','sum'),
+                        comissao_total=('comissao_calculada','sum')
+                    ).reset_index()
 
-                    # Ordena√ß√£o
+                    # Renomear linha_processo -> linha
+                    if 'linha_processo' in df_out.columns:
+                        df_out = df_out.rename(columns={'linha_processo':'linha'})
+
+                    # OrdenaÁ„o
                     sort_cols = [c for c in ['processo','DATA_RECEBIMENTO'] if c in df_out.columns]
                     if sort_cols:
                         df_out = df_out.sort_values(sort_cols)
@@ -2568,7 +2518,7 @@ class CalculoComissao:
                         anal[have].head(200).to_excel(writer, sheet_name='DEBUG_ANALISE_SAMPLE', index=False)
             except Exception as e:
                 self._log_validacao('AVISO', f'Falha ao escrever DEBUG_ANALISE_*: {e}', {})
-            # Aba de depura√ß√£o detalhada para metas de fornecedores
+            # Aba de depuraÁ„o detalhada para metas de fornecedores
             # Limpeza persistente da aba DEBUG_FORNECEDORES: manter apenas uma linha por (colaborador, linha_item, fornecedor_index)
             try:
                 if not df_debug_fornecedores.empty:
@@ -2576,14 +2526,14 @@ class CalculoComissao:
                     if 'peso_fornecedor' in df_debug_fornecedores.columns:
                         df_debug_fornecedores['peso_fornecedor'] = pd.to_numeric(df_debug_fornecedores['peso_fornecedor'], errors='coerce').fillna(0.0)
 
-                    # Mapear atribui√ß√µes por colaborador para identificar quais linhas devem ser consideradas
+                    # Mapear atribuiÁıes por colaborador para identificar quais linhas devem ser consideradas
                     df_atr = self.data.get('ATRIBUICOES', pd.DataFrame())
                     atrib_map = {}
                     if not df_atr.empty and 'colaborador' in df_atr.columns and 'linha' in df_atr.columns:
                         for col, grp in df_atr.groupby('colaborador'):
                             atrib_map[col] = set(grp['linha'].dropna().tolist())
 
-                    # Filtrar: manter apenas linhas onde o colaborador tem a linha atribu√≠da e peso_fornecedor > 0
+                    # Filtrar: manter apenas linhas onde o colaborador tem a linha atribuÌda e peso_fornecedor > 0
                     def _row_deve_ser_mantida(row):
                         try:
                             colab = row.get('colaborador')
@@ -2593,7 +2543,7 @@ class CalculoComissao:
                                 return False
                             if colab in atrib_map:
                                 return (linha in atrib_map[colab])
-                            # Se colaborador n√£o tem atribui√ß√µes registradas, assumir conservador: n√£o manter
+                            # Se colaborador n„o tem atribuiÁıes registradas, assumir conservador: n„o manter
                             return False
                         except Exception:
                             return False
@@ -2601,18 +2551,18 @@ class CalculoComissao:
                     mask = df_debug_fornecedores.apply(_row_deve_ser_mantida, axis=1)
                     df_debug_fornecedores = df_debug_fornecedores[mask].copy()
 
-                    # Deduplicar: manter apenas uma ocorr√™ncia por (colaborador, linha_item, fornecedor_index)
+                    # Deduplicar: manter apenas uma ocorrÍncia por (colaborador, linha_item, fornecedor_index)
                     dedup_dbg = [c for c in ['colaborador', 'linha_item', 'fornecedor_index'] if c in df_debug_fornecedores.columns]
                     if dedup_dbg:
                         df_debug_fornecedores = df_debug_fornecedores.drop_duplicates(subset=dedup_dbg, keep='last').reset_index(drop=True)
 
-                    # Escrever a aba de depura√ß√£o limpa
+                    # Escrever a aba de depuraÁ„o limpa
                     if not df_debug_fornecedores.empty:
                         df_debug_fornecedores.to_excel(writer, sheet_name='DEBUG_FORNECEDORES', index=False)
             except Exception as e:
                 self._log_validacao('AVISO', f'Falha ao limpar DEBUG_FORNECEDORES antes de salvar: {e}', {})
 
-            # Aba: CROSS_SELLING_DECISIONS (registro das decis√µes tomadas)
+            # Aba: CROSS_SELLING_DECISIONS (registro das decisıes tomadas)
             try:
                 if self.cross_selling_decisions:
                     df_cs = pd.DataFrame([{
@@ -2626,62 +2576,62 @@ class CalculoComissao:
                     df_cs.to_excel(writer, sheet_name='CROSS_SELLING_DECISIONS', index=False)
             except Exception as e:
                 self._log_validacao('AVISO', f'Falha ao escrever CROSS_SELLING_DECISIONS: {e}', {})
-            # Aba: RECONCILIACAO (resultados das reconcilia√ß√µes entre adiantamentos e comiss√µes finais)
+            # Aba: RECONCILIACAO (resultados das reconciliaÁıes entre adiantamentos e comissıes finais)
             try:
                 if hasattr(self, 'reconciliacao_df') and not getattr(self, 'reconciliacao_df') is None and not self.reconciliacao_df.empty:
                     self.reconciliacao_df.to_excel(writer, sheet_name='RECONCILIACAO', index=False)
             except Exception as e:
                 self._log_validacao('AVISO', f'Falha ao escrever RECONCILIACAO: {e}', {})
 
-            # Aba: ESTADO (salva o snapshot atual do estado de recebimentos/reconcilia√ß√µes)
+            # Aba: ESTADO (salva o snapshot atual do estado de recebimentos/reconciliaÁıes)
             try:
                 if getattr(self, 'estado', None) is not None and not self.estado.empty:
                     self.estado.to_excel(writer, sheet_name='ESTADO', index=False)
             except Exception as e:
-                self._log_validacao('AVISO', f'Falha ao escrever ESTADO no arquivo de sa√≠da: {e}', {})
+                self._log_validacao('AVISO', f'Falha ao escrever ESTADO no arquivo de saÌda: {e}', {})
         
-        print(f"\nC√°lculo finalizado. Arquivo de sa√≠da Excel gerado: {NOME_ARQUIVO_SAIDA}")
+        print(f"\nC·lculo finalizado. Arquivo de saÌda Excel gerado: {NOME_ARQUIVO_SAIDA}")
         print("\n--- RESUMO POR COLABORADOR ---")
         print(df_resumo.to_string(index=False))
 
         try:
-            # Logamos aqui a tentativa expl√≠cita de gerar o PDF para facilitar diagn√≥stico
+            # Logamos aqui a tentativa explÌcita de gerar o PDF para facilitar diagnÛstico
             if REPORTLAB_DISPONIVEL:
                 if getattr(self, '_logger', None):
-                    self._logger.info('Tentativa de gerar PDF de detalhamento (reportlab dispon√≠vel)')
+                    self._logger.info('Tentativa de gerar PDF de detalhamento (reportlab disponÌvel)')
                 self._gerar_detalhamento_pdf()
             else:
-                print('\nAVISO: A biblioteca "reportlab" n√£o est√° instalada. O PDF n√£o ser√° gerado.')
-                self._log_validacao('AVISO', 'Biblioteca reportlab ausente; PDF n√£o gerado.', {})
+                print('\nAVISO: A biblioteca "reportlab" n„o est· instalada. O PDF n„o ser· gerado.')
+                self._log_validacao('AVISO', 'Biblioteca reportlab ausente; PDF n„o gerado.', {})
         except Exception as e:
             if not REPORTLAB_DISPONIVEL:
-                print("\nAVISO: A biblioteca 'reportlab' n√£o est√° instalada.")
+                print("\nAVISO: A biblioteca 'reportlab' n„o est· instalada.")
                 print("Para gerar o PDF de detalhamento, instale-a com: pip install reportlab")
             else:
                 print(f"\nOcorreu um erro ao gerar o PDF de detalhamento: {e}")
 
     def executar(self):
-        """Executa o fluxo completo de c√°lculo de comiss√µes."""
-        print("Iniciando c√°lculo de comiss√µes...")
+        """Executa o fluxo completo de c·lculo de comissıes."""
+        print("Iniciando c·lculo de comissıes...")
         print("1. Carregando arquivos...")
         self._carregar_dados()
         print("2. Validando dados...")
         self._validar_dados()
-        print("3. Pr√©-processando informa√ß√µes...")
+        print("3. PrÈ-processando informaÁıes...")
         self._preprocessar_dados()
         print("4. Calculando valores realizados agregados...")
         self._calcular_realizado()
-        print("5. Calculando comiss√µes e FC item a item...")
+        print("5. Calculando comissıes e FC item a item...")
         self._calcular_comissoes()
-        # Carregar estado (se existir) e processar recebimentos/reconcilia√ß√µes
+        # Carregar estado (se existir) e processar recebimentos/reconciliaÁıes
         print("5.1 Carregando estado de recebimentos e aplicando adiantamentos (se houver)...")
         self._carregar_estado()
         self._aplicar_adiantamentos_recebimentos()
-        print("5.2 Executando reconcilia√ß√µes de processos quitados...")
+        print("5.2 Executando reconciliaÁıes de processos quitados...")
         self._executar_reconciliacoes()
-        print("6. Gerando arquivos de sa√≠da...")
+        print("6. Gerando arquivos de saÌda...")
         self._gerar_saida()
-        # Salvar estado persistente (obrigat√≥rio)
+        # Salvar estado persistente (obrigatÛrio)
         try:
             self._salvar_estado()
         except Exception:
@@ -2689,7 +2639,7 @@ class CalculoComissao:
 
 if __name__ == '__main__':
     try:
-        # Perguntar ao usu√°rio o m√™s/ano desejado e atualizar caminhos para arquivos de rentabilidade
+        # Perguntar ao usu·rio o mÍs/ano desejado e atualizar caminhos para arquivos de rentabilidade
         def solicitar_mes_ano():
             try:
                 from preparar_dados_mensais import obter_mes_ano
@@ -2698,14 +2648,14 @@ if __name__ == '__main__':
                 # fallback simples
                 while True:
                     try:
-                        ano = int(input("Digite o ano para apura√ß√£o (ex: 2025): "))
+                        ano = int(input("Digite o ano para apuraÁ„o (ex: 2025): "))
                         if 2000 < ano < 2100:
                             break
                     except Exception:
                         pass
                 while True:
                     try:
-                        mes = int(input(f"Digite o n√∫mero do m√™s para apura√ß√£o em {ano} (1-12): "))
+                        mes = int(input(f"Digite o n˙mero do mÍs para apuraÁ„o em {ano} (1-12): "))
                         if 1 <= mes <= 12:
                             break
                     except Exception:
@@ -2715,46 +2665,46 @@ if __name__ == '__main__':
         mes, ano = solicitar_mes_ano()
         # Sempre executar os scripts de limpeza que geram Recebimentos_do_Mes.xlsx
         # e Status_Pagamentos_Processos.xlsx, e em seguida o preparador de dados
-        # para garantir que os arquivos necess√°rios sejam gerados para o m√™s/ano selecionado.
+        # para garantir que os arquivos necess·rios sejam gerados para o mÍs/ano selecionado.
         try:
             import subprocess, os
             print(f"Executando script de limpeza de recebimentos para {mes}/{ano}...")
             r1 = subprocess.run([sys.executable, 'limpeza_recebimentos.py', str(mes), str(ano)], text=True, check=False)
             if r1.returncode != 0:
-                print(f"ERRO: o script 'limpeza_recebimentos.py' retornou c√≥digo {r1.returncode}. Abortando.")
+                print(f"ERRO: o script 'limpeza_recebimentos.py' retornou cÛdigo {r1.returncode}. Abortando.")
                 sys.exit(1)
             if not os.path.exists('Recebimentos_do_Mes.xlsx'):
-                print("ERRO: arquivo 'Recebimentos_do_Mes.xlsx' n√£o foi gerado pelo script de limpeza. Abortando.")
+                print("ERRO: arquivo 'Recebimentos_do_Mes.xlsx' n„o foi gerado pelo script de limpeza. Abortando.")
                 sys.exit(1)
 
             print(f"Executando script de limpeza de status de pagamentos para {mes}/{ano}...")
             r2 = subprocess.run([sys.executable, 'limpeza_status_pagamentos.py', str(mes), str(ano)], text=True, check=False)
             if r2.returncode != 0:
-                print(f"ERRO: o script 'limpeza_status_pagamentos.py' retornou c√≥digo {r2.returncode}. Abortando.")
+                print(f"ERRO: o script 'limpeza_status_pagamentos.py' retornou cÛdigo {r2.returncode}. Abortando.")
                 sys.exit(1)
             if not os.path.exists('Status_Pagamentos_Processos.xlsx'):
-                print("ERRO: arquivo 'Status_Pagamentos_Processos.xlsx' n√£o foi gerado pelo script de limpeza. Abortando.")
+                print("ERRO: arquivo 'Status_Pagamentos_Processos.xlsx' n„o foi gerado pelo script de limpeza. Abortando.")
                 sys.exit(1)
             print("Scripts de limpeza executados com sucesso.")
         except Exception as e:
             print(f"AVISO: falha ao executar os scripts de limpeza automaticamente: {e}. Abortando.")
             sys.exit(1)
 
-        # Sempre executar o preparador de dados no in√≠cio para garantir que os arquivos
-        # Faturados.xlsx, Convers√µes.xlsx, Faturados_YTD.xlsx e Retencao_Clientes.xlsx
-        # sejam gerados para o m√™s/ano selecionado.
+        # Sempre executar o preparador de dados no inÌcio para garantir que os arquivos
+        # Faturados.xlsx, Conversıes.xlsx, Faturados_YTD.xlsx e Retencao_Clientes.xlsx
+        # sejam gerados para o mÍs/ano selecionado.
         try:
             import subprocess
             print(f"Executando o preparador de dados para {mes}/{ano}...")
-            # O preparador pede ano primeiro e depois m√™s; passamos via stdin para execu√ß√£o n√£o-interativa
+            # O preparador pede ano primeiro e depois mÍs; passamos via stdin para execuÁ„o n„o-interativa
             proc_input = f"{ano}\n{mes}\n"
             subprocess.run([sys.executable, 'preparar_dados_mensais.py'], input=proc_input, text=True, check=False)
-            print("Preparador finalizado (ou retornou com aviso). Continuando com o c√°lculo de comiss√µes...")
+            print("Preparador finalizado (ou retornou com aviso). Continuando com o c·lculo de comissıes...")
         except Exception as e:
             print(f"AVISO: falha ao executar o preparador automaticamente: {e}. Continuando mesmo assim.")
-        # Atualizar vari√°veis de arquivo para usar arquivos gerados pelo preparador (os nomes fixos esperados)
+        # Atualizar vari·veis de arquivo para usar arquivos gerados pelo preparador (os nomes fixos esperados)
         ARQUIVO_FATURADOS = "Faturados.xlsx"
-        ARQUIVO_CONVERSOES = "Convers√µes.xlsx"
+        ARQUIVO_CONVERSOES = "Conversıes.xlsx"
         ARQUIVO_FATURADOS_YTD = "Faturados_YTD.xlsx"
 
         # Selecionar o arquivo de rentabilidade agrupada correto na pasta 'rentabilidades'
@@ -2766,16 +2716,16 @@ if __name__ == '__main__':
             ARQUIVO_RENTABILIDADE = encontrados[0]
             print(f"Usando arquivo de rentabilidade: {ARQUIVO_RENTABILIDADE}")
         else:
-            # fallback para nome padr√£o caso n√£o encontre agrupada
+            # fallback para nome padr„o caso n„o encontre agrupada
             padrao = f"rentabilidades/rentabilidade_{mm}_{ano}_agrupada.xlsx"
             if os.path.exists(padrao):
                 ARQUIVO_RENTABILIDADE = padrao
                 print(f"Usando arquivo de rentabilidade: {ARQUIVO_RENTABILIDADE}")
             else:
-                print(f"Aviso: n√£o foi encontrado arquivo de rentabilidade agrupada para {mm}/{ano} na pasta 'rentabilidades'. Procurados: {candidato}")
+                print(f"Aviso: n„o foi encontrado arquivo de rentabilidade agrupada para {mm}/{ano} na pasta 'rentabilidades'. Procurados: {candidato}")
 
         calculadora = CalculoComissao()
         calculadora.executar()
     except Exception as e:
-        print(f"\nOcorreu um erro fatal durante a execu√ß√£o: {e}")
+        print(f"\nOcorreu um erro fatal durante a execuÁ„o: {e}")
 

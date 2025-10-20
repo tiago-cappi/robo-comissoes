@@ -1,6 +1,7 @@
 import pandas as pd
 import re
 import os
+import sys
 
 # --- CONFIGURAÇÕES ---
 # Nome do arquivo bruto de status de pagamento gerado pelo ERP
@@ -35,7 +36,7 @@ def limpar_dados_status_pagamento():
 
     if not os.path.exists(ARQUIVO_BRUTO_STATUS):
         print(f"ERRO: O arquivo de entrada '{ARQUIVO_BRUTO_STATUS}' não foi encontrado.")
-        return
+        sys.exit(1)
 
     try:
         # Lê a planilha inteira sem assumir um cabeçalho, pois o arquivo é um relatório.
@@ -54,7 +55,11 @@ def limpar_dados_status_pagamento():
             
     if start_index == -1:
         print("\nAVISO: Nenhuma linha de cliente ('CLIENTE:') foi encontrada para iniciar o processamento.")
-        return
+        # criar arquivo vazio padronizado
+        df_empty = pd.DataFrame(columns=['PROCESSO','VALOR_ORIGINAL','STATUS_PAGAMENTO'])
+        df_empty.to_excel(ARQUIVO_SAIDA_LIMPO, index=False, engine='openpyxl')
+        print(f"Arquivo vazio salvo: '{ARQUIVO_SAIDA_LIMPO}'")
+        sys.exit(0)
 
     # Corta o DataFrame para começar a partir do primeiro bloco de cliente encontrado.
     df_processar = df_bruto.iloc[start_index:].reset_index(drop=True)
@@ -106,7 +111,10 @@ def limpar_dados_status_pagamento():
 
     if not dados_limpos:
         print("\nAVISO: Nenhuma linha de status de pagamento válida foi encontrada no arquivo de entrada.")
-        return
+        df_empty = pd.DataFrame(columns=['PROCESSO','VALOR_ORIGINAL','STATUS_PAGAMENTO'])
+        df_empty.to_excel(ARQUIVO_SAIDA_LIMPO, index=False, engine='openpyxl')
+        print(f"Arquivo vazio salvo: '{ARQUIVO_SAIDA_LIMPO}'")
+        sys.exit(0)
 
     df_limpo = pd.DataFrame(dados_limpos)
     
@@ -129,8 +137,10 @@ def limpar_dados_status_pagamento():
         df_final.to_excel(ARQUIVO_SAIDA_LIMPO, index=False, engine='openpyxl')
         print(f"\nSucesso! Arquivo de status limpo e consolidado foi salvo como: '{ARQUIVO_SAIDA_LIMPO}'")
         print(f"Total de {len(df_final)} processos únicos analisados.")
+        sys.exit(0)
     except Exception as e:
         print(f"Ocorreu um erro ao salvar o arquivo Excel de saída: {e}")
+        sys.exit(1)
 
 if __name__ == '__main__':
     limpar_dados_status_pagamento()

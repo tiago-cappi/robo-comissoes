@@ -100,96 +100,6 @@ def limpar_dados_recebimento():
         if process_col is None and any(k in c for k in ('filial', 'documento', 'processo', 'contrato', 'nota', 'doc')):
             process_col = c
 
-    # Refinar seleção das colunas com base no conteúdo real
-    try:
-        # Priorizar coluna de valor que represente baixa/pagamento/recebimento
-        pref_amount = [c for c in cols if any(k in c for k in ('baix', 'pago', 'receb'))]
-        for c in pref_amount:
-            s = pd.to_numeric(df_bruto[c], errors='coerce')
-            if s.notna().sum() > 0 and float(s.fillna(0).abs().sum()) > 0:
-                amount_col = c
-                break
-
-        # Se a coluna escolhida por preferência parecer data (ex.: interpretada como timestamp), desconsiderar
-        if amount_col is not None:
-            try:
-                s_test = pd.to_datetime(df_bruto[amount_col], errors='coerce')
-                if s_test.dropna().shape[0] > 0:
-                    # muitas datas em anos plausíveis? então não é valor
-                    share = ((s_test.dropna().dt.year >= 2000) & (s_test.dropna().dt.year <= 2100)).mean()
-                    if share > 0.5:
-                        amount_col = None
-            except Exception:
-                pass
-
-        # Se ainda não tem uma coluna de valor adequada, escolher a coluna mais numérica (maior soma absoluta)
-        def _numeric_score(col):
-            s = pd.to_numeric(df_bruto[col], errors='coerce')
-            return float(s.fillna(0).abs().sum())
-        def _looks_like_date(col):
-            s = pd.to_datetime(df_bruto[col], errors='coerce')
-            s = s.dropna()
-            if s.empty:
-                return False
-            share = ((s.dt.year >= 2000) & (s.dt.year <= 2100)).mean()
-            return share > 0.5
-
-        if amount_col is None or pd.to_numeric(df_bruto[amount_col], errors='coerce').notna().sum() == 0:
-            numeric_candidates = [c for c in cols if _numeric_score(c) > 0 and not _looks_like_date(c)]
-            # prefer explicit colunas 'unnamed_*' quando presentes (observado em arquivos do ERP)
-            numeric_candidates.sort(key=lambda c: (0 if c.startswith('unnamed_') else 1, -_numeric_score(c)))
-            if numeric_candidates:
-                amount_col = numeric_candidates[0]
-
-        # Validar/ajustar coluna de data: escolher a que mais se comporta como data
-        cand_date = [c for c in cols if any(k in c for k in ('entrada', 'baixa', 'pag', 'data', 'dt', 'ven', 'venc', 'original'))]
-        def _date_score(col):
-            s = pd.to_datetime(df_bruto[col], errors='coerce')
-            s = s.dropna()
-            if s.empty:
-                return 0
-            # considerar datas plausíveis (anos 2000..2100)
-            return int(((s.dt.year >= 2000) & (s.dt.year <= 2100)).sum())
-
-        # prioridade: entrada/baixa/pagamento > vencimento > demais
-        def _priority(col):
-            name = col
-            if any(k in name for k in ('entrada', 'baixa', 'pag')):
-                return 0
-            if 'ven' in name or 'venc' in name:
-                return 1
-            return 2
-
-        # Caso especial observado: coluna 'vl_original' pode conter a data misturada ao texto
-        if 'vl_original' in cols:
-            import re as _re
-            tmp = df_bruto['vl_original'].astype(str).str.extract(r'((?:\d{4}-\d{2}-\d{2})|(?:\d{2}/\d{2}/\d{4}))', expand=False)
-            if tmp.notna().sum() > 0:
-                df_bruto['vl_original'] = tmp
-                date_col = 'vl_original'
-
-        if cand_date and (date_col is None or date_col not in cand_date):
-            scored = [(c, _date_score(c)) for c in cand_date]
-            # escolher por maior score; em empate, menor prioridade
-            scored.sort(key=lambda t: (-t[1], _priority(t[0])))
-            if scored[0][1] > 0:
-                date_col = scored[0][0]
-
-        # Preferir coluna de processo que efetivamente contenha números identificadores
-        cand_proc = []
-        # ordem de preferência: filial -> processo -> contrato/nota -> documento/doc
-        for key in ('filial', 'processo', 'contrato', 'nota', 'documento', 'doc'):
-            cand_proc.extend([c for c in cols if key in c])
-        for c in cand_proc:
-            vals = df_bruto[c].astype(str).fillna('')
-            # score por presença de números com 4+ dígitos em algumas linhas
-            has_digits = vals.head(50).apply(lambda x: True if re.search(r'\d{4,}', x) else False).sum()
-            if has_digits > 0:
-                process_col = c
-                break
-    except Exception:
-        pass
-
     # Melhor fallback: inspecionar conteúdo para detectar possível coluna de processo
     if process_col is None:
         for c in cols:
@@ -300,4 +210,5 @@ def limpar_dados_recebimento():
 
 if __name__ == '__main__':
     limpar_dados_recebimento()
+
 
