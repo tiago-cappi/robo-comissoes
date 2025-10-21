@@ -49,7 +49,6 @@ class CalculoComissao:
         self.validation_log = []
         self.legacy_token = '__legacy__'
         self.cache_regras = {}
-        self.auditoria_fc = []
         # Cache para taxas de câmbio: chave (ano, mes_final, tuple(moedas)) -> dict
         self.cache_cambio = {}
         # Coleta de depuração para metas de fornecedores
@@ -372,9 +371,21 @@ class CalculoComissao:
         """Calcula um FC único para um colaborador e um item faturado específico."""
         pesos = self.data['PESOS_METAS'][self.data['PESOS_METAS']['cargo'] == cargo_colab]
         if pesos.empty:
-            return 0
+            return 0, {}
         pesos = pesos.iloc[0]
         fc_total_item = 0
+
+        # Estrutura para coletar detalhes por componente do FC
+        detalhes_fc = {
+            'faturamento_linha': None,
+            'conversao_linha': None,
+            'faturamento_individual': None,
+            'conversao_individual': None,
+            'rentabilidade': None,
+            'retencao_clientes': None,
+            'meta_fornecedor_1': None,
+            'meta_fornecedor_2': None
+        }
 
         item_context = {
             'linha': item_faturado['Negócio'], 'grupo': item_faturado['Grupo'],
@@ -409,15 +420,15 @@ class CalculoComissao:
             componente_fc = atingimento_cap * peso
             fc_total_item += componente_fc
 
-            self.auditoria_fc.append({
-                'colaborador': nome_colab, 'cargo': cargo_colab,
-                'cod_produto': item_faturado['Código Produto'],
-                'linha_item': item_context['linha'],
-                'tipo_meta': tipo_meta, 'peso': peso,
-                'realizado': realizado, 'meta': meta,
-                'atingimento': atingimento, 'atingimento_cap': atingimento_cap,
+            # armazenar detalhe deste componente
+            detalhes_fc[tipo_meta] = {
+                'peso': peso,
+                'realizado': realizado,
+                'meta': meta,
+                'atingimento': atingimento,
+                'atingimento_cap': atingimento_cap,
                 'componente_fc': componente_fc
-            })
+            }
             
         cap_fc = float(self.params.get('cap_fc_max', 1.0))
         # --- Novo componente: Retenção de Clientes (aplica-se apenas a Gerente Linha) ---
@@ -458,16 +469,14 @@ class CalculoComissao:
                         componente_fc_ret = atingimento_cap * peso_ret
                         fc_total_item += componente_fc_ret
 
-                        # Registrar na auditoria (tipo_meta = 'retencao_clientes')
-                        self.auditoria_fc.append({
-                            'colaborador': nome_colab, 'cargo': cargo_colab,
-                            'cod_produto': item_faturado.get('Código Produto', None),
-                            'linha_item': item_faturado.get('Negócio', None),
-                            'tipo_meta': 'retencao_clientes', 'peso': peso_ret,
-                            'realizado': clientes_atual, 'meta': clientes_ant,
-                            'atingimento': taxa_retencao, 'atingimento_cap': atingimento_cap,
+                        detalhes_fc['retencao_clientes'] = {
+                            'peso': peso_ret,
+                            'realizado': clientes_atual,
+                            'meta': clientes_ant,
+                            'atingimento': taxa_retencao,
+                            'atingimento_cap': atingimento_cap,
                             'componente_fc': componente_fc_ret
-                        })
+                        }
         except Exception:
             # Em caso de qualquer erro nessa extensão, não interrompemos o cálculo principal
             pass
@@ -599,8 +608,6 @@ class CalculoComissao:
                         if not row_peso.empty:
                             peso_fornecedor = float(row_peso.iloc[0].get(peso_col_name, 0)) / 100.0
 
-                    componente_fc_forn = atingimento_cap * peso_fornecedor
-                    fc_total_item += componente_fc_forn
 
                     # Log resumo do fornecedor
                     try:
@@ -639,21 +646,21 @@ class CalculoComissao:
                     debug_entry['taxas_completas'] = (len(taxas_meses_none) == 0) if isinstance(taxas_obs, dict) and len(taxas_obs) > 0 else False
                     self.debug_fornecedores.append(debug_entry)
 
-                    # Registrar auditoria
-                    self.auditoria_fc.append({
-                        'colaborador': nome_colab, 'cargo': cargo_colab,
-                        'cod_produto': item_faturado.get('Código Produto', None),
-                        'linha_item': linha_do_item,
-                        'tipo_meta': peso_col_name, 'peso': peso_fornecedor,
-                        'realizado': faturamento_realizado_ytd, 'meta': meta_ytd,
-                        'atingimento': atingimento, 'atingimento_cap': atingimento_cap,
-                        'componente_fc': componente_fc_forn, 'moeda': moeda
-                    })
+                    # armazenar detalhes do fornecedor (meta_fornecedor_1/2)
+                    detalhes_fc[peso_col_name] = {
+                        'peso': peso_fornecedor,
+                        'realizado': faturamento_realizado_ytd,
+                        'meta': meta_ytd,
+                        'atingimento': atingimento,
+                        'atingimento_cap': atingimento_cap,
+                        'componente_fc': componente_fc_forn,
+                        'moeda': moeda
+                    }
         except Exception as e:
             # Não interromper fluxo principal em caso de erro nos componentes de fornecedor
             self._log_validacao('AVISO', f'Erro ao calcular metas de fornecedores: {e}', {'item': item_faturado.get('Código Produto', None)})
 
-        return min(fc_total_item, cap_fc)
+        return min(fc_total_item, cap_fc), detalhes_fc
 
     def _get_taxas_de_cambio(self, ano, mes_final, moedas):
         """Retorna dicionário {moeda: {mes: taxa}} com média mensal de cada moeda do mês 1..mes_final.
@@ -1598,15 +1605,6 @@ class CalculoComissao:
                                 atingimento_cap = min(taxa_retencao, cap_atingimento)
                                 componente_fc_ret = atingimento_cap * peso_ret
                                 fc_total += componente_fc_ret
-                                self.auditoria_fc.append({
-                                    'colaborador': nome_colab, 'cargo': cargo_colab,
-                                    'cod_produto': item_faturado.get('Código Produto', None),
-                                    'linha_item': item_faturado.get('Negócio', None),
-                                    'tipo_meta': 'retencao_clientes', 'peso': peso_ret,
-                                    'realizado': clientes_atual, 'meta': clientes_ant,
-                                    'atingimento': taxa_retencao, 'atingimento_cap': atingimento_cap,
-                                    'componente_fc': componente_fc_ret
-                                })
             except Exception:
                 pass
 
@@ -1659,16 +1657,6 @@ class CalculoComissao:
 
                         componente_fc_forn = atingimento_cap * peso_fornecedor
                         fc_total += componente_fc_forn
-                        # auditoria
-                        self.auditoria_fc.append({
-                            'colaborador': nome_colab, 'cargo': cargo_colab,
-                            'cod_produto': item_faturado.get('Código Produto', None),
-                            'linha_item': linha_do_item,
-                            'tipo_meta': peso_col_name, 'peso': peso_fornecedor,
-                            'realizado': faturamento_realizado_ytd, 'meta': meta_ytd,
-                            'atingimento': atingimento, 'atingimento_cap': atingimento_cap,
-                            'componente_fc': componente_fc_forn
-                        })
             except Exception:
                 pass
 
@@ -1679,7 +1667,7 @@ class CalculoComissao:
     def _calcular_comissoes(self):
         """Itera sobre os itens faturados, calcula o FC para cada um e a comissão final."""
         comissoes_calculadas = []
-        self.auditoria_fc = [] 
+        # auditoria detalhada agora é armazenada nas colunas de COMISSOES_CALCULADAS
         df_faturados = self.data['FATURADOS']
         df_atribuicoes = self.data['ATRIBUICOES']
         df_colabs_com_cargos = self.data['COLABORADORES']
@@ -1863,7 +1851,7 @@ class CalculoComissao:
 
                 regra = self._get_regra_comissao(**contexto_item, cargo=colab_cargo)
                 if regra is None: continue
-                fc = self._calcular_fc_para_item(colab_nome, colab_cargo, item_faturado)
+                fc, detalhes_fc_item = self._calcular_fc_para_item(colab_nome, colab_cargo, item_faturado)
 
                 faturamento_item = item_faturado['Valor Realizado']
                 taxa_rateio = regra['taxa_rateio_maximo_pct'] / 100.0
@@ -1886,7 +1874,8 @@ class CalculoComissao:
                 comissao_potencial = faturamento_item * taxa_rateio * pe
                 comissao_item = comissao_potencial * fc
                 
-                comissoes_calculadas.append({
+                # construir dicionário base e depois anexar colunas detalhadas do FC
+                base_dict = {
                     'id_colaborador': df_colabs_com_cargos.loc[df_colabs_com_cargos['nome_colaborador'] == colab_nome, 'id_colaborador'].iloc[0],
                     'nome_colaborador': colab_nome, 'cargo': colab_cargo,
                     'cod_produto': item_faturado['Código Produto'], 'descricao_produto': item_faturado['Descrição Produto'],
@@ -1895,9 +1884,45 @@ class CalculoComissao:
                     'fator_correcao_fc': fc, 'percentual_elegibilidade_pe': pe,
                     'comissao_potencial_maxima': comissao_potencial,
                     'comissao_calculada': comissao_item
-                })
+                }
+
+                # helper para extrair valores seguros do detalhes_fc_item
+                def _g(dct, key, subkey, default=None):
+                    try:
+                        v = dct.get(key)
+                        if v is None:
+                            return default
+                        return v.get(subkey, default)
+                    except Exception:
+                        return default
+
+                # Mapear componentes padronizados para colunas
+                mapping = {
+                    'faturamento_linha': 'fat_linha',
+                    'conversao_linha': 'conv_linha',
+                    'faturamento_individual': 'fat_ind',
+                    'conversao_individual': 'conv_ind',
+                    'rentabilidade': 'rentab',
+                    'retencao_clientes': 'retencao',
+                    'meta_fornecedor_1': 'forn1',
+                    'meta_fornecedor_2': 'forn2'
+                }
+
+                for comp, short in mapping.items():
+                    detalhes = detalhes_fc_item.get(comp) if isinstance(detalhes_fc_item, dict) else None
+                    base_dict[f'peso_{short}'] = _g(detalhes_fc_item, comp, 'peso', None)
+                    base_dict[f'realizado_{short}'] = _g(detalhes_fc_item, comp, 'realizado', None)
+                    base_dict[f'meta_{short}'] = _g(detalhes_fc_item, comp, 'meta', None)
+                    base_dict[f'ating_{short}'] = _g(detalhes_fc_item, comp, 'atingimento', None)
+                    base_dict[f'ating_cap_{short}'] = _g(detalhes_fc_item, comp, 'atingimento_cap', None)
+                    base_dict[f'comp_fc_{short}'] = _g(detalhes_fc_item, comp, 'componente_fc', None)
+                    # se houver moeda (aplicável a fornecedores), incluir coluna moeda_
+                    if comp.startswith('meta_fornecedor'):
+                        base_dict[f'moeda_{short}'] = _g(detalhes_fc_item, comp, 'moeda', None)
+
+                        comissoes_calculadas.append(base_dict)
         
-        self.comissoes_df = pd.DataFrame(comissoes_calculadas)
+                self.comissoes_df = pd.DataFrame(comissoes_calculadas)
 
     def _handle_cross_selling_prompt(self, processo, consultor, linha, taxa):
         """Mostra prompt interativo no terminal para decisão A ou B sobre o cross-selling.
@@ -1993,23 +2018,7 @@ class CalculoComissao:
         except Exception:
             # se algo falhar, não impedir a geração, apenas continuar
             self._no_faturamento_mes = False
-        df_auditoria = pd.DataFrame(self.auditoria_fc)
-        # --- Limpieza para apresentação: remover metas com peso 0 e deduplicar por colaborador/meta/linha ---
-        if not df_auditoria.empty:
-            # Normalizar coluna 'peso' para float quando possível
-            if 'peso' in df_auditoria.columns:
-                df_auditoria['peso'] = pd.to_numeric(df_auditoria['peso'], errors='coerce').fillna(0.0)
-            else:
-                df_auditoria['peso'] = 0.0
-
-            # Remover metas cujo peso é zero — não queremos mostrá-las no relatório de auditoria
-            df_auditoria = df_auditoria[df_auditoria['peso'] != 0.0].copy()
-
-            # Deduplicar entradas: manter apenas uma ocorrência por (colaborador, tipo_meta, linha_item).
-            # Isto preserva o caso em que um colaborador participa de múltiplas linhas diferentes
-            dedup_subset = [c for c in ['colaborador', 'tipo_meta', 'linha_item'] if c in df_auditoria.columns]
-            if dedup_subset:
-                df_auditoria = df_auditoria.drop_duplicates(subset=dedup_subset, keep='last').reset_index(drop=True)
+        # Detalhes do FC agora estão incorporados nas colunas de df_comissoes
 
         # --- Limpeza local apenas para apresentação no PDF ---
         # Evita páginas duplicadas no PDF quando o DataFrame de comissões
@@ -2073,42 +2082,35 @@ class CalculoComissao:
 
             story.append(Paragraph("<b>Passo 2: Cálculo do Fator de Correção (FC)</b>", styles['h2']))
             
-            # Selecionar componentes de auditoria relevantes para este colaborador/item.
-            # Se a coluna 'cod_produto' existir (legado), ainda usamos-a para maior especificidade.
-            if 'cod_produto' in df_auditoria.columns and 'cod_produto' in comissao.index:
-                auditoria_item_colab = df_auditoria[
-                    (df_auditoria['colaborador'] == comissao['nome_colaborador']) &
-                    (df_auditoria['cod_produto'] == comissao['cod_produto'])
-                ]
-            elif 'linha_item' in df_auditoria.columns and 'linha' in comissao.index:
-                # Nova regra: FC aplica-se à linha como um todo — match por colaborador + linha
-                auditoria_item_colab = df_auditoria[
-                    (df_auditoria['colaborador'] == comissao['nome_colaborador']) &
-                    (df_auditoria['linha_item'] == comissao['linha'])
-                ]
-            else:
-                # Fallback: todos os registros do colaborador
-                auditoria_item_colab = df_auditoria[df_auditoria['colaborador'] == comissao['nome_colaborador']]
+            # Detalhes do FC agora estão nas colunas do DataFrame de comissões. Imprimir por tipo se o peso existir.
+            mapping = {
+                'faturamento_linha': 'fat_linha',
+                'conversao_linha': 'conv_linha',
+                'faturamento_individual': 'fat_ind',
+                'conversao_individual': 'conv_ind',
+                'rentabilidade': 'rentab',
+                'retencao_clientes': 'retencao',
+                'meta_fornecedor_1': 'forn1',
+                'meta_fornecedor_2': 'forn2'
+            }
 
-            if auditoria_item_colab.empty:
-                story.append(Paragraph("Nenhum componente de FC aplicável para este cargo/item.", styles['Normal']))
-            else:
-                # Ordem e deduplicação por tipo_meta para evitar repetições no PDF
-                if 'tipo_meta' in auditoria_item_colab.columns:
-                    auditoria_item_colab = auditoria_item_colab.sort_values(['tipo_meta']).drop_duplicates(subset=['tipo_meta'], keep='last')
+            any_comp = False
+            for tipo_meta, short in mapping.items():
+                peso_col = f'peso_{short}'
+                if peso_col in comissao.index and comissao.get(peso_col) not in (None, 0, 0.0) and not pd.isna(comissao.get(peso_col)):
+                    any_comp = True
+                    peso = comissao.get(peso_col) or 0
+                    realizado = comissao.get(f'realizado_{short}', None)
+                    meta_val = comissao.get(f'meta_{short}', None)
+                    atingimento = comissao.get(f'ating_{short}', 0) or 0
+                    ating_cap = comissao.get(f'ating_cap_{short}', 0) or 0
+                    componente_fc = comissao.get(f'comp_fc_{short}', 0) or 0
 
-                for _, aud in auditoria_item_colab.iterrows():
-                    # Formata valores conforme o tipo de métrica para melhor leitura
-                    tipo = str(aud.get('tipo_meta', ''))
-                    # Meta e realizado podem ser None/NaN; tratar com segurança
-                    meta_val = aud.get('meta', None)
-                    realizado_val = aud.get('realizado', None)
-
+                    # formatar strings similares ao comportamento anterior
                     if pd.isna(meta_val):
                         meta_str = 'N/A'
                     else:
-                        # Mostrar meta como valor monetário para faturamento/conversão
-                        if 'faturamento' in tipo or 'conversao' in tipo:
+                        if 'fat' in short or 'conv' in short:
                             try:
                                 meta_str = f"R$ {float(meta_val):,.2f}"
                             except Exception:
@@ -2116,30 +2118,28 @@ class CalculoComissao:
                         else:
                             meta_str = f"{float(meta_val):.2f}" if isinstance(meta_val, (int, float, np.floating)) else str(meta_val)
 
-                    if pd.isna(realizado_val):
+                    if pd.isna(realizado):
                         realizado_str = 'N/A'
                     else:
-                        if 'faturamento' in tipo or 'conversao' in tipo:
+                        if 'fat' in short or 'conv' in short:
                             try:
-                                realizado_str = f"R$ {float(realizado_val):,.2f}"
+                                realizado_str = f"R$ {float(realizado):,.2f}"
                             except Exception:
-                                realizado_str = str(realizado_val)
+                                realizado_str = str(realizado)
                         else:
-                            realizado_str = f"{float(realizado_val):.2f}" if isinstance(realizado_val, (int, float, np.floating)) else str(realizado_val)
+                            realizado_str = f"{float(realizado):.2f}" if isinstance(realizado, (int, float, np.floating)) else str(realizado)
 
-                    atingimento = aud.get('atingimento', 0)
-                    atingimento_cap = aud.get('atingimento_cap', 0)
-                    peso = aud.get('peso', 0)
-                    componente_fc = aud.get('componente_fc', 0)
-
-                    story.append(Paragraph(f"<b>Componente: {tipo}</b>", styles['h3']))
+                    story.append(Paragraph(f"<b>Componente: {tipo_meta}</b>", styles['h3']))
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- Peso da Meta: {peso:.2%}", styles['Normal']))
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- Valor Realizado: {realizado_str}", styles['Normal']))
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- Valor da Meta: {meta_str}", styles['Normal']))
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- Atingimento: {atingimento:.2%}", styles['Normal']))
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- Atingimento (com cap): {atingimento_cap:.2%}", styles['Normal']))
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- <b>Cálculo do Componente FC:</b> {atingimento_cap:.2%} * {peso:.2%} = <b>{componente_fc:.4f}</b>", styles['Normal']))
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- Atingimento (com cap): {ating_cap:.2%}", styles['Normal']))
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;- <b>Cálculo do Componente FC:</b> {ating_cap:.2%} * {peso:.2%} = <b>{componente_fc:.4f}</b>", styles['Normal']))
                     story.append(Spacer(1, 6))
+
+            if not any_comp:
+                story.append(Paragraph("Nenhum componente de FC aplicável para este cargo/item.", styles['Normal']))
 
             story.append(Paragraph(f"<b>FC Total para este Item:</b> {comissao['fator_correcao_fc']:.4f}", styles['h3']))
             story.append(Spacer(1, 24))
@@ -2180,8 +2180,20 @@ class CalculoComissao:
             colunas_principais = ['id_colaborador', 'nome_colaborador', 'cargo', 'processo', 'cod_produto', 'descricao_produto']
             colunas_contexto = ['linha', 'grupo', 'subgrupo', 'tipo_mercadoria']
             colunas_calculo = ['faturamento_item', 'taxa_rateio_aplicada', 'percentual_elegibilidade_pe', 'fator_correcao_fc']
+            # detalhes do FC — para cada componente incluímos colunas padronizadas
+            detalhes_shorts = ['fat_linha','conv_linha','fat_ind','conv_ind','rentab','retencao','forn1','forn2']
+            detalhes_cols = []
+            for s in detalhes_shorts:
+                detalhes_cols.extend([
+                    f'peso_{s}', f'realizado_{s}', f'meta_{s}', f'ating_{s}', f'ating_cap_{s}', f'comp_fc_{s}'
+                ])
+                if s.startswith('forn'):
+                    detalhes_cols.append(f'moeda_{s}')
+
             colunas_resultado = ['comissao_potencial_maxima', 'comissao_calculada']
-            ordem_final = colunas_principais + colunas_contexto + colunas_calculo + colunas_resultado
+            ordem_final = colunas_principais + colunas_contexto + colunas_calculo + detalhes_cols + colunas_resultado
+            # filtrar somente colunas que existem no DataFrame para evitar KeyError
+            ordem_final = [c for c in ordem_final if c in df_comissoes.columns]
             df_comissoes = df_comissoes[ordem_final]
 
         # Remover do arquivo principal quaisquer colaboradores que recebem por recebimento.
@@ -2333,40 +2345,9 @@ class CalculoComissao:
             # Se algo falhar, manter o resumo previamente calculado
             pass
 
-        df_auditoria = pd.DataFrame(self.auditoria_fc)
+        # detalhes do FC foram incorporados em self.comissoes_df
         df_validacao = pd.DataFrame(self.validation_log)
         df_debug_fornecedores = pd.DataFrame(self.debug_fornecedores)
-
-        # --- Limpeza persistente da auditoria para escrita no Excel ---
-        try:
-            if not df_auditoria.empty:
-                # Normalizar coluna 'peso' para float quando possível
-                if 'peso' in df_auditoria.columns:
-                    df_auditoria['peso'] = pd.to_numeric(df_auditoria['peso'], errors='coerce').fillna(0.0)
-                else:
-                    df_auditoria['peso'] = 0.0
-
-                # Remover metas cujo peso é zero — não queremos armazenar essas linhas no Excel final
-                before_cnt = len(df_auditoria)
-                df_auditoria = df_auditoria[df_auditoria['peso'] != 0.0].copy()
-                after_cnt = len(df_auditoria)
-                if getattr(self, '_logger', None):
-                    self._logger.info(f"AUDITORIA_FC: filtradas {before_cnt - after_cnt} linhas com peso==0.0 antes de salvar no Excel")
-
-                # Deduplicar entradas: manter apenas uma ocorrência por (colaborador, tipo_meta, linha_item).
-                dedup_subset = [c for c in ['colaborador', 'tipo_meta', 'linha_item'] if c in df_auditoria.columns]
-                if dedup_subset:
-                    df_auditoria = df_auditoria.drop_duplicates(subset=dedup_subset, keep='last').reset_index(drop=True)
-
-            # Remover coluna 'cod_produto' — o FC é válido para o colaborador/linha como um todo
-            if 'cod_produto' in df_auditoria.columns:
-                df_auditoria = df_auditoria.drop(columns=['cod_produto'])
-
-            # Atualiza o estado interno para que o PDF use a versão limpa da auditoria
-            self.auditoria_fc = df_auditoria.to_dict('records') if not df_auditoria.empty else []
-        except Exception as e:
-            # Não interromper a geração de saída por erro aqui; apenas registrar
-            self._log_validacao('AVISO', f'Falha ao limpar AUDITORIA_FC antes de salvar: {e}', {})
 
         with pd.ExcelWriter(NOME_ARQUIVO_SAIDA, engine='openpyxl') as writer:
             # Se sinalizado que não houve faturamento no mês, inserir uma linha de aviso
@@ -2502,7 +2483,6 @@ class CalculoComissao:
                         self._logger.info('Aba COMISSOES_RECEBIMENTO escrita (1 linha por pagamento; inclui linha do processo).')
             except Exception as e:
                 self._log_validacao('AVISO', f'Falha ao escrever COMISSOES_RECEBIMENTO: {e}', {})
-            df_auditoria.to_excel(writer, sheet_name='AUDITORIA_FC', index=False)
             df_validacao.to_excel(writer, sheet_name='VALIDACAO', index=False)
             # Abas de DEBUG adicionais para diagnosticar COMISSOES_RECEBIMENTO
             try:
