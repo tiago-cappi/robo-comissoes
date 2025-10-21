@@ -58,8 +58,16 @@ def gerar_faturados(df, mes, ano):
             date_col = c
             break
     if date_col is None:
-        print("ERRO: não foi possível localizar coluna de data 'Dt Emissão' para faturados.")
-        return False
+        print("ERRO: não foi possível localizar coluna de data 'Dt Emissão' para faturados. Gerando arquivo vazio com cabeçalho.")
+        # criar arquivo vazio com cabeçalho esperado
+        df_out = pd.DataFrame(columns=wanted)
+        try:
+            df_out.to_excel(arquivo_saida, index=False)
+            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_out)} linhas (vazio).")
+            return True
+        except Exception as e:
+            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+            return False
 
     raw = df[date_col].astype(str).str.strip().replace({'nan': ''})
     raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
@@ -73,8 +81,16 @@ def gerar_faturados(df, mes, ano):
     print(f"Encontradas {len(df_filtrado)} linhas para o período de {mes}/{ano} (Dt Emissão).")
 
     if df_filtrado.empty:
-        print("Nenhum dado encontrado para o período selecionado. O arquivo 'Faturados.xlsx' não será gerado.")
-        return True
+        print("Nenhum dado encontrado para o período selecionado. Gerando 'Faturados.xlsx' vazio com cabeçalho.")
+        # criar arquivo vazio com cabeçalho esperado
+        df_out = pd.DataFrame(columns=wanted)
+        try:
+            df_out.to_excel(arquivo_saida, index=False)
+            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_out)} linhas (vazio).")
+            return True
+        except Exception as e:
+            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+            return False
 
     # aplicar filtro por operações (tolerante)
     operacoes_validas = {'FLOC','IMO2','OR19','P205','PSEM','PSER','SERV','PVEN','PVMA'}
@@ -151,8 +167,24 @@ def gerar_conversoes(df, mes, ano):
                 break
 
     if data_aceite_col is None:
-        print("AVISO: coluna 'Data Aceite' não encontrada; não será gerado 'Conversões.xlsx'.")
-        return False
+        print("AVISO: coluna 'Data Aceite' não encontrada; gerando 'Conversões.xlsx' vazio com cabeçalho.")
+        # gerar arquivo vazio com colunas base
+        arquivo_saida = 'Conversões.xlsx'
+        base_cols = [
+            'Código Produto', 'Descrição Produto', 'Qtde Atendida', 'Operação',
+            'Processo', 'Status Processo', 'Data Aceite', 'Valor Orçado', 'Valor Realizado',
+            'Consultor Interno', 'Representante-pedido', 'Gerente Comercial-Pedido',
+            'Aplicação Mat./Serv.', 'Cliente', 'Nome Cliente', 'Cidade', 'UF',
+            'Tipo de Mercadoria', 'Subgrupo', 'Grupo', 'Negócio'
+        ]
+        df_final = pd.DataFrame(columns=base_cols)
+        try:
+            df_final.to_excel(arquivo_saida, index=False)
+            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_final)} linhas (vazio).")
+            return True
+        except Exception as e:
+            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+            return False
 
     raw = df[data_aceite_col].astype(str).str.strip().replace({'nan': ''})
     raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
@@ -170,8 +202,23 @@ def gerar_conversoes(df, mes, ano):
     print(f"Encontradas {len(df_filtrado)} linhas para o período de {mes}/{ano} (Data Aceite).")
 
     if df_filtrado.empty:
-        print("Nenhum dado convertido encontrado para o período selecionado. O arquivo 'Conversões.xlsx' não será gerado.")
-        return True
+        print("Nenhum dado convertido encontrado para o período selecionado. Gerando 'Conversões.xlsx' vazio com cabeçalho.")
+        arquivo_saida = 'Conversões.xlsx'
+        base_cols = [
+            'Código Produto', 'Descrição Produto', 'Qtde Atendida', 'Operação',
+            'Processo', 'Status Processo', 'Data Aceite', 'Valor Orçado', 'Valor Realizado',
+            'Consultor Interno', 'Representante-pedido', 'Gerente Comercial-Pedido',
+            'Aplicação Mat./Serv.', 'Cliente', 'Nome Cliente', 'Cidade', 'UF',
+            'Tipo de Mercadoria', 'Subgrupo', 'Grupo', 'Negócio'
+        ]
+        df_final = pd.DataFrame(columns=base_cols)
+        try:
+            df_final.to_excel(arquivo_saida, index=False)
+            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_final)} linhas (vazio).")
+            return True
+        except Exception as e:
+            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+            return False
 
     # aplicar filtro de operações semelhante ao faturados
     operacoes_validas = {'FLOC','IMO2','OR19','P205','PSEM','PSER','SERV','PVEN','PVMA'}
@@ -336,8 +383,15 @@ def gerar_faturados_ytd(df, mes, ano):
             date_col = c
             break
     if date_col is None:
-        print("ERRO: não foi possível encontrar coluna 'Dt Emissão' para gerar Faturados_YTD.")
-        return False
+        print("ERRO: não foi possível encontrar coluna 'Dt Emissão' para gerar Faturados_YTD. Gerando arquivo vazio com cabeçalho.")
+        df_final = pd.DataFrame(columns=wanted)
+        try:
+            df_final.to_excel(arquivo_saida, index=False)
+            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_final)} linhas (vazio).")
+            return True
+        except Exception as e:
+            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+            return False
 
     # Parse dates robustly
     raw = df[date_col].astype(str).str.strip().replace({'nan': ''})
@@ -427,8 +481,8 @@ def gerar_faturados_ytd(df, mes, ano):
                 df_ytd[want] = pd.NA
 
     df_final = df_ytd[wanted].copy()
-
     try:
+        # garantir que um arquivo seja sempre gerado mesmo se df_final estiver vazio
         df_final.to_excel(arquivo_saida, index=False)
         print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_final)} linhas.")
         return True
@@ -496,8 +550,16 @@ def gerar_retencao_clientes(df, mes, ano):
             cliente_col = c
 
     if negocio_col is None or cliente_col is None:
-        print("ERRO: colunas necessárias 'Negócio' ou 'Cliente' não encontradas.")
-        return False
+        print("ERRO: colunas necessárias 'Negócio' ou 'Cliente' não encontradas. Gerando arquivo vazio com cabeçalho.")
+        arquivo_saida = 'Retencao_Clientes.xlsx'
+        df_out = pd.DataFrame(columns=['linha', 'clientes_mes_anterior', 'clientes_mes_atual'])
+        try:
+            df_out.to_excel(arquivo_saida, index=False)
+            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_out)} linhas (vazio).")
+            return True
+        except Exception as e:
+            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+            return False
 
     # Build the two windows based on user-selected month/year and previous month
     from datetime import datetime
@@ -575,6 +637,7 @@ def gerar_retencao_clientes(df, mes, ano):
 
     df_out = pd.DataFrame(rows).sort_values('linha')
     try:
+        # garantir que sempre geramos o arquivo mesmo que vazio
         df_out.to_excel(arquivo_saida, index=False)
         print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_out)} linhas.")
         return True
