@@ -1792,7 +1792,7 @@ class CalculoComissao:
             colaboradores_para_comissionar = pd.concat([
                 atribuidos_gestao[['colaborador', 'cargo']],
                 atribuidos_operacional[['nome_colaborador', 'cargo']].rename(columns={'nome_colaborador': 'colaborador'})
-            ]).drop_duplicates().reset_index(drop=True)
+            ]).drop_duplicates(subset=['colaborador', 'cargo']).reset_index(drop=True)
 
 
             # Verificar se este processo foi detectado como cross-selling
