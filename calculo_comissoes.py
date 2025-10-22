@@ -1,6 +1,7 @@
 ﻿import pandas as pd
 import numpy as np
 import os
+import preparar_dados_mensais
 from datetime import datetime
 import calendar
 import time
@@ -57,6 +58,11 @@ class CalculoComissao:
         self.debug_fornecedores = []
         # Decisões e marcações de cross-selling por Processo
         self.cross_selling_decisions = {}
+        # Estruturas auxiliares para conciliação retroativa
+        self.reconciliacao_detalhada_list = []
+        self.reconciliacao_resumo_list = []
+        # Caminho base para localizar arquivos históricos
+        self.base_path = os.getcwd()
 
     def _log_validacao(self, nivel, mensagem, contexto={}):
         """Adiciona uma entrada ao log de validação."""
@@ -89,10 +95,9 @@ class CalculoComissao:
                             except Exception:
                                 continue
                 except Exception:
+                    return pd.DataFrame()
                     pass
                 return pd.DataFrame()
-
-            self.data['FATURADOS'] = _try_read_any([ARQUIVO_FATURADOS, 'Faturados.xlsx', 'Faturados.csv'])
             self.data['CONVERSOES'] = _try_read_any([ARQUIVO_CONVERSOES, 'Conversões.xlsx', 'Conversoes.xlsx', 'Conversões.csv', 'Conversoes.csv'])
             self.data['RENTABILIDADE_REALIZADA'] = pd.read_excel(ARQUIVO_RENTABILIDADE)
             # Novo arquivo com dados de retenção de clientes por linha
@@ -215,6 +220,9 @@ class CalculoComissao:
             self.params = pd.Series(params_df.valor.values, index=params_df.chave).to_dict()
             # parâmetro para escolha default em execuções não interativas
             self.params['cross_selling_default_option'] = str(self.params.get('cross_selling_default_option', 'A')).upper()
+            param_base_path = self.params.get('base_path')
+            if param_base_path:
+                self.base_path = str(param_base_path)
             self.legacy_token = self.params.get('legacy_scope_token', '__legacy__')
             # Configurar logger para depuração no terminal se solicitado
             debug_terminal = str(self.params.get('debug_terminal_fornecedores', False)).lower() in ('1', 'true', 'yes')
@@ -597,12 +605,12 @@ class CalculoComissao:
                             else:
                                 faturamento_convertido = 0.0
                             # Log mensal detalhado
-                            try:
-                                if logger and logger.isEnabledFor(logging.DEBUG):
-                                    logger.debug(f"Fornecedor#{idx} mes={mes}: soma_brl={soma_brl:.2f} taxa_mes={taxa_mes} faturamento_convertido={faturamento_convertido:.4f}")
-                            except Exception:
-                                pass
-                            faturamento_realizado_ytd += faturamento_convertido
+                    try:
+                        if logger and logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(f"Fornecedor#{idx} mes={mes}: soma_brl={soma_brl:.2f} taxa_mes={taxa_mes} faturamento_convertido={faturamento_convertido:.4f}")
+                    except Exception:
+                        pass
+                    faturamento_realizado_ytd += faturamento_convertido
 
                     # Cálculo do atingimento e componente
                     try:
@@ -632,8 +640,7 @@ class CalculoComissao:
                             logger.debug(f"Resumo fornecedor#{idx} colaborador={nome_colab} fornecedor={fornecedor_nome} meta_ytd={meta_ytd:.2f} faturamento_realizado_ytd={faturamento_realizado_ytd:.4f} atingimento={atingimento:.4f} atingimento_cap={atingimento_cap:.4f} peso={peso_fornecedor:.4f} componente_fc={componente_fc_forn:.6f}")
                     except Exception:
                         pass
-
-                        # Coleta de depuração para este cálculo de fornecedor
+                    # Coleta de depuração para este cálculo de fornecedor
                     debug_entry = {
                         'colaborador': nome_colab,
                         'cargo': cargo_colab,
@@ -793,7 +800,7 @@ class CalculoComissao:
         try:
             # Definir esquema correto do estado
             expected = ['PROCESSO', 'VALOR_TOTAL_PROCESSO', 'TOTAL_PAGO_ACUMULADO', 'TOTAL_ADIANTADO_COMISSAO',
-                        'STATUS_RECONCILIACAO', 'STATUS_PROCESSO_ANALISE', 'ULTIMA_ATUALIZACAO']
+                        'STATUS_PAGAMENTO', 'STATUS_RECONCILIACAO', 'STATUS_PROCESSO_ANALISE', 'ULTIMA_ATUALIZACAO']
             if os.path.exists(ARQUIVO_ESTADO):
                 try:
                     df_estado = pd.read_excel(ARQUIVO_ESTADO, sheet_name='ESTADO')
@@ -808,6 +815,8 @@ class CalculoComissao:
                 df_estado['TOTAL_PAGO_ACUMULADO'] = pd.to_numeric(df_estado['TOTAL_PAGO_ACUMULADO'], errors='coerce').fillna(0.0)
                 df_estado['TOTAL_ADIANTADO_COMISSAO'] = pd.to_numeric(df_estado['TOTAL_ADIANTADO_COMISSAO'], errors='coerce').fillna(0.0)
                 df_estado['VALOR_TOTAL_PROCESSO'] = pd.to_numeric(df_estado['VALOR_TOTAL_PROCESSO'], errors='coerce').fillna(0.0)
+                if 'STATUS_PAGAMENTO' in df_estado.columns:
+                    df_estado['STATUS_PAGAMENTO'] = df_estado['STATUS_PAGAMENTO'].astype(str).replace({'nan': None})
                 self.estado = df_estado
             else:
                 # Iniciar DataFrame vazio com as colunas corretas
@@ -815,7 +824,7 @@ class CalculoComissao:
         except Exception as e:
             self._log_validacao('AVISO', f'Falha ao carregar estado ({ARQUIVO_ESTADO}): {e}', {})
             # Garantir esquema mínimo em caso de erro
-            self.estado = pd.DataFrame(columns=['PROCESSO', 'VALOR_TOTAL_PROCESSO', 'TOTAL_PAGO_ACUMULADO', 'TOTAL_ADIANTADO_COMISSAO', 'STATUS_RECONCILIACAO', 'STATUS_PROCESSO_ANALISE', 'ULTIMA_ATUALIZACAO'])
+            self.estado = pd.DataFrame(columns=['PROCESSO', 'VALOR_TOTAL_PROCESSO', 'TOTAL_PAGO_ACUMULADO', 'TOTAL_ADIANTADO_COMISSAO', 'STATUS_PAGAMENTO', 'STATUS_RECONCILIACAO', 'STATUS_PROCESSO_ANALISE', 'ULTIMA_ATUALIZACAO'])
 
     def _salvar_estado(self):
         """Salva o dataframe de estado no arquivo ARQUIVO_ESTADO."""
@@ -907,6 +916,53 @@ class CalculoComissao:
             df_colabs_com_cargos = self.data.get('COLABORADORES', pd.DataFrame())
             df_status_pag = self.data.get('STATUS_PAGAMENTOS', pd.DataFrame())
 
+            def _normalize_proc(val):
+                if val is None or (isinstance(val, float) and pd.isna(val)):
+                    return None
+                if isinstance(val, (int, np.integer)):
+                    return str(int(val))
+                if isinstance(val, float):
+                    if pd.isna(val):
+                        return None
+                    if float(val).is_integer():
+                        return str(int(val))
+                    return str(val).strip()
+                s = str(val).strip()
+                if not s:
+                    return None
+                try:
+                    s_float = float(s.replace(',', '.'))
+                    if float(s_float).is_integer():
+                        return str(int(s_float))
+                except Exception:
+                    pass
+                return s
+
+            def _find_column(df, aliases):
+                for col in df.columns:
+                    if str(col).strip().lower() in aliases:
+                        return col
+                return None
+
+            status_map = {}
+            valor_map = {}
+            if df_status_pag is not None and not df_status_pag.empty:
+                proc_col = _find_column(df_status_pag, {'processo', 'id processo', 'id_processo'})
+                status_col = _find_column(df_status_pag, {'status_pagamento', 'status pagamento', 'status do pagamento', 'status_pagamento_processo', 'status'})
+                valor_col = _find_column(df_status_pag, {'valor_original', 'valor original', 'valor', 'valor do processo'})
+
+                if proc_col is not None:
+                    for _, row in df_status_pag.iterrows():
+                        key = _normalize_proc(row.get(proc_col))
+                        if not key:
+                            continue
+                        if status_col is not None:
+                            status_map[key] = row.get(status_col)
+                        if valor_col is not None:
+                            existing = valor_map.get(key)
+                            if existing is None or pd.isna(existing):
+                                valor_map[key] = row.get(valor_col)
+
             cargos_gestao = df_colabs_com_cargos[df_colabs_com_cargos['tipo_cargo'] == 'Gestão']['cargo'].unique() if not df_colabs_com_cargos.empty else []
             df_atribuicoes_gestao = df_atr[df_atr['cargo'].isin(cargos_gestao)] if not df_atr.empty else pd.DataFrame()
 
@@ -918,9 +974,11 @@ class CalculoComissao:
                     continue
 
                 proc = int(proc) if (not pd.isna(proc) and str(proc).strip().isdigit()) else str(proc).strip()
+                proc_norm = _normalize_proc(proc)
 
                 # Obter VALOR_ORIGINAL do arquivo Status_Pagamentos_Processos, se disponível
-                valor_original = None
+                valor_original = valor_map.get(proc_norm)
+                status_pag_val = status_map.get(proc_norm)
                 try:
                     if not df_status_pag.empty and 'PROCESSO' in df_status_pag.columns:
                         sp = df_status_pag[df_status_pag['PROCESSO'] == proc]
@@ -932,6 +990,11 @@ class CalculoComissao:
                                 if col_candidate in sp.columns:
                                     valor_original = sp.iloc[0][col_candidate]
                                     break
+                            if status_pag_val is None:
+                                for status_candidate in ('STATUS_PAGAMENTO', 'Status Pagamento', 'Status_Pagamento', 'STATUS', 'Status'):
+                                    if status_candidate in sp.columns:
+                                        status_pag_val = sp.iloc[0][status_candidate]
+                                        break
                 except Exception:
                     valor_original = None
                 # Preferir valor do Analise_Comercial_Completa (Valor Orçado e aliases) quando existir
@@ -971,6 +1034,7 @@ class CalculoComissao:
                         'VALOR_TOTAL_PROCESSO': vtp_val,
                         'TOTAL_PAGO_ACUMULADO': float(valor_recebido),
                         'TOTAL_ADIANTADO_COMISSAO': 0.0,
+                        'STATUS_PAGAMENTO': status_pag_val,
                         'STATUS_RECONCILIACAO': 'Nao Realizada',
                         'STATUS_PROCESSO_ANALISE': None,
                         'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
@@ -990,6 +1054,8 @@ class CalculoComissao:
                         vrec = pd.to_numeric(valor_recebido, errors='coerce')
                         vrec = float(vrec) if not pd.isna(vrec) else 0.0
                     self.estado.at[idx0, 'TOTAL_PAGO_ACUMULADO'] = prev_pago + vrec
+                    if status_pag_val is not None and not (isinstance(status_pag_val, float) and pd.isna(status_pag_val)):
+                        self.estado.at[idx0, 'STATUS_PAGAMENTO'] = status_pag_val
                     # atualizar VALOR_TOTAL_PROCESSO se estiver vazio
                     try:
                         vtp = pd.to_numeric(self.estado.at[idx0, 'VALOR_TOTAL_PROCESSO'], errors='coerce')
@@ -1031,6 +1097,17 @@ class CalculoComissao:
                 except Exception:
                     # não bloquear o fluxo se houver problemas de formatação
                     self.estado.at[idx, 'STATUS_PROCESSO_ANALISE'] = None
+ 
+            if status_map:
+                for idx in self.estado.index:
+                    try:
+                        proc_norm_all = _normalize_proc(self.estado.at[idx, 'PROCESSO'])
+                        if proc_norm_all and proc_norm_all in status_map:
+                            status_val = status_map.get(proc_norm_all)
+                            if status_val is not None and not (isinstance(status_val, float) and pd.isna(status_val)):
+                                self.estado.at[idx, 'STATUS_PAGAMENTO'] = status_val
+                    except Exception:
+                        continue
 
             if novas_linhas:
                 try:
@@ -1041,12 +1118,15 @@ class CalculoComissao:
                         p = r.get('processo')
                         val = r.get('comissao_calculada', 0.0)
                         sidx = self.estado[self.estado['PROCESSO'] == p].index
+                        norm_p = _normalize_proc(p)
+                        status_retro = status_map.get(norm_p)
                         if len(sidx) == 0:
                             nova = {
                                 'PROCESSO': p,
                                 'VALOR_TOTAL_PROCESSO': 0.0,
                                 'TOTAL_PAGO_ACUMULADO': 0.0,
                                 'TOTAL_ADIANTADO_COMISSAO': float(val) if not pd.isna(val) else 0.0,
+                                'STATUS_PAGAMENTO': status_retro,
                                 'STATUS_RECONCILIACAO': 'Nao Realizada',
                                 'STATUS_PROCESSO_ANALISE': None,
                                 'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
@@ -1060,6 +1140,8 @@ class CalculoComissao:
                             val_num = float(val_num) if not pd.isna(val_num) else 0.0
                             self.estado.at[idx0, 'TOTAL_ADIANTADO_COMISSAO'] = prev + val_num
                             self.estado.at[idx0, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
+                            if status_retro is not None and not (isinstance(status_retro, float) and pd.isna(status_retro)):
+                                self.estado.at[idx0, 'STATUS_PAGAMENTO'] = status_retro
                 except Exception as e:
                     self._log_validacao('AVISO', f'Falha ao anexar linhas de adiantamento: {e}', {})
 
@@ -1238,7 +1320,7 @@ class CalculoComissao:
         except Exception as e:
             self._log_validacao('AVISO', f'Erro ao gerar COMISSOES_RECEBIMENTO: {e}', {})
 
-        # Atualizar TOTAL_ADIANTADO_COMISSAO de forma idempotente a partir de COMISSOES_RECEBIMENTO
+        # Atualizar TOTAL_ADIANTADO_COMISSAO acumulando a partir de COMISSOES_RECEBIMENTO
         try:
             if hasattr(self, 'comissoes_recebimento_df') and self.comissoes_recebimento_df is not None and not self.comissoes_recebimento_df.empty:
                 soma_proc = self.comissoes_recebimento_df.groupby('processo', dropna=False)['comissao_calculada'].sum().to_dict()
@@ -1246,1302 +1328,507 @@ class CalculoComissao:
                     p = self.estado.at[i, 'PROCESSO']
                     if p in soma_proc:
                         try:
-                            self.estado.at[i, 'TOTAL_ADIANTADO_COMISSAO'] = float(soma_proc[p])
+                            prev = pd.to_numeric(self.estado.at[i, 'TOTAL_ADIANTADO_COMISSAO'], errors='coerce')
+                            prev = float(prev) if not pd.isna(prev) else 0.0
+                            add = float(soma_proc[p]) if not pd.isna(soma_proc[p]) else 0.0
+                            self.estado.at[i, 'TOTAL_ADIANTADO_COMISSAO'] = prev + add
                         except Exception:
                             pass
         except Exception as e:
             self._log_validacao('AVISO', f'Falha ao atualizar TOTAL_ADIANTADO_COMISSAO a partir de COMISSOES_RECEBIMENTO: {e}', {})
 
+
     def _executar_reconciliacoes(self):
-        """Executa reconciliações para processos pagos, comparando comissões corretas e adiantamentos.
+        print("Iniciando reconciliações de comissões por recebimento...")
+        self.reconciliacao_detalhada_list = []
+        self.reconciliacao_resumo_list = []
 
-        - Para cada processo com STATUS_PAGAMENTO indicando pagamento, e que esteja Pendente no estado,
-          soma a comissão correta (linhas não-Adiantamento) e calcula saldo = correto - TOTAL_ADIANTADO_COMISSAO.
-        - Atualiza self.estado e cria self.reconciliacao_df para escrita no Excel.
-        """
-        reconc_list = []
-        reconc_detail_rows = []
         try:
-            # Separator header for reconciliation debug logs (clear in terminal)
-            logger = getattr(self, '_logger', None)
+            self._sync_estado_from_inputs()
+        except Exception:
+            pass
+        estado_df = getattr(self, 'estado', None)
+        if estado_df is None or estado_df.empty:
+            print("  Nenhum processo elegível no estado. Reconciliações não executadas.")
+            return
+        for idx, row in estado_df.iterrows():
+            proc = row.get('PROCESSO')
+            if proc is None:
+                continue
+            if isinstance(proc, float) and pd.isna(proc):
+                continue
+            proc_str = str(proc).strip()
+            if not proc_str:
+                continue
+
+            status_pagamento = str(row.get('STATUS_PAGAMENTO', '') or '').strip().lower()
+            status_analise = str(row.get('STATUS_PROCESSO_ANALISE', '') or '').strip().lower()
+            status_reconc = str(row.get('STATUS_RECONCILIACAO', '') or '').strip().lower()
+
+            if not (status_pagamento == 'quitado' and status_analise == 'faturado'):
+                continue
+            if status_reconc in ('realizada', 'concluida'):
+                continue
+
             try:
-                if logger:
-                    logger.info('\n' + '='*80)
-                    logger.info('RECONCILIACAO - DEBUG START')
-                    logger.info('='*80 + '\n')
+                total_adiantado = pd.to_numeric(row.get('TOTAL_ADIANTADO_COMISSAO', 0.0), errors='coerce')
             except Exception:
-                pass
-            # Synchronize estado with inputs and use it as the single source of truth for reconciliation decisions
+                total_adiantado = 0.0
+            total_adiantado = float(total_adiantado) if not pd.isna(total_adiantado) else 0.0
+
             try:
-                self._sync_estado_from_inputs()
-            except Exception:
-                pass
-
-            if getattr(self, 'estado', None) is None or self.estado.empty:
-                self.reconciliacao_df = pd.DataFrame(reconc_list)
-                return
-
-            for i in self.estado.index:
-                try:
-                    proc = self.estado.at[i, 'PROCESSO']
-                except Exception:
-                    continue
-                try:
-                    status_pag = self.estado.at[i, 'STATUS_PAGAMENTO'] if 'STATUS_PAGAMENTO' in self.estado.columns else None
-                except Exception:
-                    status_pag = None
-                try:
-                    status_analise = self.estado.at[i, 'STATUS_PROCESSO_ANALISE'] if 'STATUS_PROCESSO_ANALISE' in self.estado.columns else None
-                except Exception:
-                    status_analise = None
-
-                try:
-                    cond_pag = str(status_pag).strip().lower() == 'quitado'
-                except Exception:
-                    cond_pag = False
-                try:
-                    cond_fat_analise = str(status_analise).strip().lower() == 'faturado' if status_analise is not None else False
-                except Exception:
-                    cond_fat_analise = False
-
-                # exige as duas condições: pagamento quitado E status na analise == faturado
-                if not (cond_pag and cond_fat_analise):
+                linhas_detalhadas, comissao_correta_total = self._gerar_reconciliacao_detalhada_processo(proc_str)
+                if not linhas_detalhadas:
+                    print(f"  [AVISO] Reconciliação para {proc_str} não gerou linhas. Pulando.")
                     continue
 
-                # buscar estado
-                sidx = self.estado[self.estado['PROCESSO'] == proc].index
-                total_adiant = 0.0
-                status_recon = None
-                if len(sidx) > 0:
-                    try:
-                        ta_val = self.estado.at[sidx[0], 'TOTAL_ADIANTADO_COMISSAO']
-                        ta_num = pd.to_numeric(ta_val, errors='coerce')
-                        total_adiant = float(ta_num) if not pd.isna(ta_num) else 0.0
-                    except Exception:
-                        total_adiant = 0.0
-                    status_recon = self.estado.at[sidx[0], 'STATUS_RECONCILIACAO']
-
-                # pular se já reconciliado (STATUS_RECONCILIACAO marcado como 'Realizada' ou 'Concluida')
-                if isinstance(status_recon, str) and status_recon.strip().lower() in ('concluida', 'realizada'):
-                    continue
-
-                # calcular comissao correta retroativa
-                df_proc_orig = self.comissoes_df[~self.comissoes_df.get('tipo_lancamento', pd.Series([''] * len(self.comissoes_df))).astype(str).str.contains('Adiantamento', na=False) & (self.comissoes_df['processo'] == proc)]
-                try:
-                    if logger:
-                        # show how many precomputed commission rows exist for this process
-                        total_pre = 0 if (not hasattr(self, 'comissoes_df') or self.comissoes_df is None) else len(self.comissoes_df[self.comissoes_df['processo'] == proc])
-                        # compute exact and tolerant counts for recebimento rows (tolerant: string contains)
-                        total_rec_exact = 0
-                        total_rec_contains = 0
-                        try:
-                            if hasattr(self, 'comissoes_recebimento_df') and self.comissoes_recebimento_df is not None:
-                                cr = self.comissoes_recebimento_df
-                                total_rec_exact = len(cr[cr['processo'] == proc])
-                                try:
-                                    proc_s = str(proc).strip()
-                                    total_rec_contains = len(cr[cr['processo'].astype(str).str.contains(proc_s, na=False)])
-                                except Exception:
-                                    total_rec_contains = total_rec_exact
-                            else:
-                                # fallback to comissoes_df where tipo_lancamento == 'Recebimento'
-                                if hasattr(self, 'comissoes_df') and self.comissoes_df is not None:
-                                    cdf = self.comissoes_df
-                                    rec_only = cdf[cdf.get('tipo_lancamento', pd.Series([''] * len(cdf))).astype(str).str.strip().str.lower() == 'recebimento']
-                                    total_rec_exact = len(rec_only[rec_only['processo'] == proc])
-                                    try:
-                                        proc_s = str(proc).strip()
-                                        total_rec_contains = len(rec_only[rec_only['processo'].astype(str).str.contains(proc_s, na=False)])
-                                    except Exception:
-                                        total_rec_contains = total_rec_exact
-                        except Exception:
-                            total_rec_exact = 0
-                            total_rec_contains = 0
-                        logger.info(f"[RECONC][{proc}] precomputed_rows_for_proc={total_pre} recebimento_rows_exact={total_rec_exact} recebimento_rows_contains={total_rec_contains} df_proc_orig_rows={len(df_proc_orig)}")
-                        try:
-                            if total_pre > 0:
-                                logger.info(f"[RECONC][{proc}] sample precomputed rows:\n{self.comissoes_df[self.comissoes_df['processo'] == proc].head(3).to_string()}")
-                            if total_rec > 0:
-                                logger.info(f"[RECONC][{proc}] sample recebimento rows:\n{self.comissoes_recebimento_df[self.comissoes_recebimento_df['processo'] == proc].head(3).to_string()}")
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-                # Prefer to derive mes/ano de faturamento from Analise_Comercial_Completa (Dt Emissão for the process)
-                mes_fat = None
-                ano_fat = None
-                try:
-                    df_anal = self.data.get('ANALISE_COMERCIAL_COMPLETA', pd.DataFrame())
-                    if not df_anal.empty:
-                        # find rows matching the process (robust match)
-                        proc_s = str(proc).strip()
-                        if 'Processo' in df_anal.columns:
-                            rows_proc = df_anal[df_anal['Processo'].astype(str).str.strip() == proc_s]
-                        else:
-                            # try any column named similarly
-                            proc_cols = [c for c in df_anal.columns if str(c).strip().lower() == 'processo']
-                            rows_proc = df_anal[proc_cols[0]] if proc_cols else pd.DataFrame()
-                        if rows_proc is None or (isinstance(rows_proc, pd.Series) and rows_proc.empty):
-                            rows_proc = pd.DataFrame()
-                        if rows_proc.empty:
-                            # try numeric match
-                            try:
-                                proc_int = int(float(proc))
-                                rows_proc = df_anal[df_anal['Processo'].astype(str).str.strip() == str(proc_int)]
-                            except Exception:
-                                rows_proc = pd.DataFrame()
-                        if not rows_proc.empty:
-                            # try to extract 'Dt Emissão' from these rows
-                            date_cols = [c for c in rows_proc.columns if 'dt' in str(c).lower() and 'emiss' in str(c).lower() or str(c).strip().lower() in ("dt emissão","dt emissao","dt_emissao","dt_emissao")]
-                            # fallback to any date-like column named 'Dt Emissão' or 'Dt Emissão' variants
-                            if not date_cols:
-                                for cand in ('Dt Emissão','Dt Emissao','DT_EMISSAO','Dt_Emissao'):
-                                    if cand in rows_proc.columns:
-                                        date_cols = [cand]
-                                        break
-                            if date_cols:
-                                # pick first non-null date value
-                                for c in date_cols:
-                                    try:
-                                        ser = pd.to_datetime(rows_proc[c], errors='coerce')
-                                        ser = ser[ser.notna()]
-                                        if not ser.empty:
-                                            dt = ser.iloc[0]
-                                            mes_fat = int(dt.month)
-                                            ano_fat = int(dt.year)
-                                            break
-                                    except Exception:
-                                        continue
-                except Exception:
-                    mes_fat = None
-                    ano_fat = None
-                # if not found in analysis file, fall back to saved estado month/year if present
-                if (mes_fat is None or ano_fat is None) and len(sidx) > 0:
-                    try:
-                        mf = self.estado.at[sidx[0], 'MES_FATURAMENTO']
-                        af = self.estado.at[sidx[0], 'ANO_FATURAMENTO']
-                        mf_num = pd.to_numeric(mf, errors='coerce')
-                        af_num = pd.to_numeric(af, errors='coerce')
-                        mes_fat = int(mf_num) if not pd.isna(mf_num) else mes_fat
-                        ano_fat = int(af_num) if not pd.isna(af_num) else ano_fat
-                    except Exception:
-                        pass
-
-                # ensure hist and warnings_proc are defined for later reconciliation rows
-                hist = {}
-                warnings_proc = []
-                comissao_corret = 0.0
-                # ensure component aggregators exist even when there are no original rows
-                comp_frac_sums = {'retencao': 0.0, 'forn1': 0.0, 'forn2': 0.0}
-                comp_amt_sums = {'retencao': 0.0, 'forn1': 0.0, 'forn2': 0.0}
-                # If there are no precomputed commission rows for this process, try to
-                # synthesize per-item commission rows from ANALISE_COMERCIAL_COMPLETA
-                # using collaborators present on the original invoice lines. This
-                # allows retroactive FC calculation even when COMISSOES_CALCULADAS
-                # lacks entries for the process (e.g., process imported after run-start).
-                generated_from_analise = False
-                if df_proc_orig.empty:
-                    comissao_corret = 0.0
-                    try:
-                        df_anal = self.data.get('ANALISE_COMERCIAL_COMPLETA', pd.DataFrame())
-                        if not df_anal.empty and 'Processo' in df_anal.columns:
-                            proc_s = str(proc).strip()
-                            rows_proc = df_anal[df_anal['Processo'].astype(str).str.strip() == proc_s]
-                            if rows_proc.empty:
-                                try:
-                                    proc_int = int(float(proc))
-                                    rows_proc = df_anal[df_anal['Processo'].astype(str).str.strip() == str(proc_int)]
-                                except Exception:
-                                    rows_proc = pd.DataFrame()
-
-                            temp_rows = []
-                            if not rows_proc.empty:
-                                # For each invoice item, try to create commission rows for likely collaborators
-                                for _, arow in rows_proc.iterrows():
-                                    # prefer explicit collaborators in order: Gerente Comercial-Pedido, Consultor Interno, Representante-pedido
-                                    candidate_cols = ['Gerente Comercial-Pedido', 'Consultor Interno', 'Representante-pedido']
-                                    for col in candidate_cols:
-                                        try:
-                                            cand = arow.get(col)
-                                        except Exception:
-                                            cand = None
-                                        if cand is None or (isinstance(cand, float) and pd.isna(cand)):
-                                            continue
-                                        # debug
-                                        try:
-                                            if getattr(self, '_logger', None) and self._logger.isEnabledFor(logging.DEBUG):
-                                                self._logger.debug(f"Synth candidate for proc={proc}: column={col} value={cand}")
-                                        except Exception:
-                                            pass
-                                        nome_colab = str(cand).strip()
-                                        # find collaborator record to obtain cargo and id
-                                        df_colabs = self.data.get('COLABORADORES', pd.DataFrame())
-                                        row_col = pd.DataFrame()
-                                        try:
-                                            row_col = df_colabs[df_colabs['nome_colaborador'].astype(str).str.strip() == nome_colab]
-                                        except Exception:
-                                            try:
-                                                row_col = df_colabs[df_colabs['nome_colaborador'] == nome_colab]
-                                            except Exception:
-                                                row_col = pd.DataFrame()
-                                        cargo = row_col.iloc[0]['cargo'] if not row_col.empty and 'cargo' in row_col.columns else None
-                                        try:
-                                            if getattr(self, '_logger', None) and self._logger.isEnabledFor(logging.DEBUG):
-                                                self._logger.debug(f"Synth: found collaborator row for '{nome_colab}' -> cargo={cargo} row_found={not row_col.empty}")
-                                        except Exception:
-                                            pass
-                                        # try a tolerant lookup (normalize accents, casefold)
-                                        def normalize_str(s):
-                                            if s is None:
-                                                return ''
-                                            s = str(s)
-                                            s = unicodedata.normalize('NFKD', s)
-                                            s = ''.join(ch for ch in s if not unicodedata.combining(ch))
-                                            return s.strip().casefold()
-                                        try:
-                                            target_norm = normalize_str(nome_colab)
-                                            col_norm = df_colabs['nome_colaborador'].fillna('').map(normalize_str)
-                                            mask = col_norm == target_norm
-                                            if not mask.any():
-                                                # fallback to substring match
-                                                mask = col_norm.str.contains(re.escape(target_norm), na=False)
-                                            row_col = df_colabs[mask]
-                                        except Exception:
-                                            # preserve previous fallback behaviour
-                                            try:
-                                                regra = None
-                                                regra = self._get_regra_comissao(arow.get('Negócio'), arow.get('Grupo'), arow.get('Subgrupo'), arow.get('Tipo de Mercadoria'), cargo)
-                                            except Exception:
-                                                regra = None
-                                            if row_col is None:
-                                                row_col = pd.DataFrame()
-                                        cargo = row_col.iloc[0]['cargo'] if not row_col.empty and 'cargo' in row_col.columns else None
-                                        regra = None
-                                        try:
-                                            regra = self._get_regra_comissao(arow.get('Negócio'), arow.get('Grupo'), arow.get('Subgrupo'), arow.get('Tipo de Mercadoria'), cargo)
-                                        except Exception:
-                                            regra = None
-                                        if regra is None:
-                                            try:
-                                                if getattr(self, '_logger', None) and self._logger.isEnabledFor(logging.DEBUG):
-                                                    self._logger.debug(f"Synth: no regra found for linha={arow.get('Negócio')} tipo={arow.get('Tipo de Mercadoria')} cargo={cargo}; skipping candidate {nome_colab}")
-                                            except Exception:
-                                                pass
-                                            # if we cannot derive a rule, skip this candidate
-                                            continue
-                                        taxa_rateio = float(regra.get('taxa_rateio_maximo_pct', 0)) / 100.0 if regra is not None else 0.0
-                                        pe = float(regra.get('fatia_cargo_pct', 0)) / 100.0 if regra is not None else 0.0
-                                        fatur_item = None
-                                        # prefer Valor Realizado when present, otherwise Valor Orçado
-                                        for cand_v in ('Valor Realizado', 'Valor Orçado', 'Valor Orcado'):
-                                            if cand_v in rows_proc.columns:
-                                                try:
-                                                    fatur_item = float(arow.get(cand_v) or 0.0)
-                                                    break
-                                                except Exception:
-                                                    fatur_item = 0.0
-                                        if fatur_item is None:
-                                            fatur_item = 0.0
-
-                                        temp_rows.append({
-                                            'id_colaborador': row_col.iloc[0]['id_colaborador'] if not row_col.empty and 'id_colaborador' in row_col.columns else None,
-                                            'nome_colaborador': nome_colab,
-                                            'cargo': cargo,
-                                            'cod_produto': arow.get('Código Produto'),
-                                            'descricao_produto': arow.get('Descrição Produto'),
-                                            'processo': proc,
-                                            'linha': arow.get('Negócio'),
-                                            'grupo': arow.get('Grupo'),
-                                            'subgrupo': arow.get('Subgrupo'),
-                                            'tipo_mercadoria': arow.get('Tipo de Mercadoria'),
-                                            'faturamento_item': fatur_item,
-                                            'taxa_rateio_aplicada': taxa_rateio,
-                                            'percentual_elegibilidade_pe': pe,
-                                            'fator_correcao_fc': 1.0,
-                                            'comissao_calculada': fatur_item * taxa_rateio * pe,
-                                            'tipo_lancamento': None
-                                        })
-                                if temp_rows:
-                                    df_proc_orig = pd.DataFrame(temp_rows)
-                                    generated_from_analise = True
-                    except Exception:
-                        df_proc_orig = pd.DataFrame()
-                else:
-                    # First, try to generate temporary DataFrames for the process' faturamento month
-                    hist, warnings_proc = self._prepare_historic_for_process(mes_fat, ano_fat)
-                    # Determine relevant colaboradores for retro FC: those who have 'Recebimento' entries for this processo
-                    try:
-                        proc_s = str(proc).strip()
-                        # exact match preferred
-                        if hasattr(self, 'comissoes_recebimento_df') and self.comissoes_recebimento_df is not None and not self.comissoes_recebimento_df.empty:
-                            rec_df = self.comissoes_recebimento_df[self.comissoes_recebimento_df['processo'] == proc]
-                        else:
-                            rec_df = self.comissoes_df[(self.comissoes_df['processo'] == proc) & (self.comissoes_df.get('tipo_lancamento', pd.Series([''] * len(self.comissoes_df))).astype(str).str.strip() == 'Recebimento')]
-
-                        # Fallback: if no exact matches, try tolerant string-based contains (handles variants like '9999991' vs '999999')
-                        if (rec_df is None) or (hasattr(rec_df, 'empty') and rec_df.empty):
-                            proc_s = str(proc).strip()
-                            try:
-                                if hasattr(self, 'comissoes_recebimento_df') and self.comissoes_recebimento_df is not None and not self.comissoes_recebimento_df.empty:
-                                    rec_df = self.comissoes_recebimento_df[self.comissoes_recebimento_df['processo'].astype(str).str.contains(proc_s, na=False)]
-                            except Exception:
-                                pass
-                        if (rec_df is None) or (hasattr(rec_df, 'empty') and rec_df.empty):
-                            try:
-                                rec_df = self.comissoes_df[self.comissoes_df['processo'].astype(str).str.contains(proc_s, na=False)]
-                            except Exception:
-                                # keep rec_df as empty DataFrame
-                                rec_df = pd.DataFrame()
-                    except Exception:
-                        rec_df = pd.DataFrame()
-
-                    relevant_colaboradores = set()
-                    try:
-                        for _, r in rec_df.iterrows():
-                            nome = str(r.get('nome_colaborador')).strip() if r.get('nome_colaborador') is not None else ''
-                            linha = str(r.get('linha')).strip() if r.get('linha') is not None and not pd.isna(r.get('linha')) else None
-                            grupo = str(r.get('grupo')).strip() if r.get('grupo') is not None and not pd.isna(r.get('grupo')) else None
-                            sub = str(r.get('subgrupo')).strip() if r.get('subgrupo') is not None and not pd.isna(r.get('subgrupo')) else None
-                            tipo = str(r.get('tipo_mercadoria')).strip() if r.get('tipo_mercadoria') is not None and not pd.isna(r.get('tipo_mercadoria')) else None
-                            relevant_colaboradores.add((nome, linha, grupo, sub, tipo))
-                    except Exception:
-                        relevant_colaboradores = set()
-
-                    # sums for FC components (fractions) and their monetary impact on commission
-                    for _, com_row in df_proc_orig.iterrows():
-                        try:
-                            item_fat = {
-                                'Negócio': com_row.get('linha'),
-                                'Grupo': com_row.get('grupo'),
-                                'Subgrupo': com_row.get('subgrupo'),
-                                'Tipo de Mercadoria': com_row.get('tipo_mercadoria'),
-                                'Código Produto': com_row.get('cod_produto'),
-                                'Dt Emissão': None
-                            }
-                            nome_col = com_row.get('nome_colaborador')
-                            cargo_col = com_row.get('cargo')
-                            # Only calculate retroactive FC for collaborators that are relevant (receive by 'Recebimento'
-                            # and match the linha/grupo/subgrupo/tipo_mercadoria of the process item). For other collaborators,
-                            # treat the retro factor as neutral (1.0) to avoid irrelevant computations.
-                            try:
-                                nome_check = str(nome_col).strip() if nome_col is not None else ''
-                                linha_check = str(com_row.get('linha')).strip() if com_row.get('linha') is not None and not pd.isna(com_row.get('linha')) else None
-                                grupo_check = str(com_row.get('grupo')).strip() if com_row.get('grupo') is not None and not pd.isna(com_row.get('grupo')) else None
-                                sub_check = str(com_row.get('subgrupo')).strip() if com_row.get('subgrupo') is not None and not pd.isna(com_row.get('subgrupo')) else None
-                                tipo_check = str(com_row.get('tipo_mercadoria')).strip() if com_row.get('tipo_mercadoria') is not None and not pd.isna(com_row.get('tipo_mercadoria')) else None
-                                is_relevant = (nome_check, linha_check, grupo_check, sub_check, tipo_check) in relevant_colaboradores
-                            except Exception:
-                                is_relevant = False
-
-                            if is_relevant:
-                                # compute retroactive FC using historical data gathered above
-                                try:
-                                    fc_retro_val, detalhes_retro = self._calcular_fc_retroativo_for_item(nome_col, cargo_col, item_fat, hist, mes_fat, ano_fat)
-                                except Exception as e_fc:
-                                    fc_retro_val, detalhes_retro = 1.0, {}
-                                    try:
-                                        if logger:
-                                            logger.info(f"[RECONC][{proc}] Erro ao calcular FC retroativo para {nome_col} ({cargo_col}) no item {item_fat.get('Código Produto')}: {e_fc}")
-                                    except Exception:
-                                        pass
-                            else:
-                                # neutral factor and empty detalhes
-                                fc_retro_val, detalhes_retro = 1.0, {}
-                                try:
-                                    if logger:
-                                        logger.info(f"[RECONC][{proc}] Colaborador {nome_col} não relevante para FC retroativo nesta linha (usando 1.0)")
-                                except Exception:
-                                    pass
-                            # taxa_rateio_aplicada and percentual_elegibilidade_pe should be present in com_row (from COMISSOES_CALCULADAS)
-                            # but normalize and fallback to regra when missing
-                            raw_taxa = com_row.get('taxa_rateio_aplicada') if com_row.get('taxa_rateio_aplicada') is not None else com_row.get('taxa_rateio')
-                            raw_pe = com_row.get('percentual_elegibilidade_pe') if com_row.get('percentual_elegibilidade_pe') is not None else com_row.get('fatia_cargo_pct')
-                            def _norm_frac(x):
-                                try:
-                                    if x is None or (isinstance(x, float) and pd.isna(x)):
-                                        return None
-                                    v = float(x)
-                                    if v > 1.0:  # likely a percentage stored as 50 -> convert
-                                        return v / 100.0
-                                    return v
-                                except Exception:
-                                    return None
-
-                            taxa_rateio = _norm_frac(raw_taxa)
-                            pe = _norm_frac(raw_pe)
-                            if taxa_rateio is None or pe is None:
-                                # fallback to rule lookup
-                                try:
-                                    regra = self._get_regra_comissao(com_row.get('linha'), com_row.get('grupo'), com_row.get('subgrupo'), com_row.get('tipo_mercadoria'), com_row.get('cargo'))
-                                    if regra is not None:
-                                        if taxa_rateio is None:
-                                            taxa_rateio = float(regra.get('taxa_rateio_maximo_pct', 0)) / 100.0
-                                        if pe is None:
-                                            pe = float(regra.get('fatia_cargo_pct', 0)) / 100.0
-                                except Exception:
-                                    pass
-                            taxa_rateio = float(taxa_rateio or 0.0)
-                            pe = float(pe or 0.0)
-                            fatur_item = float(com_row.get('faturamento_item') or 0.0)
-                            com_calc = fatur_item * taxa_rateio * pe * fc_retro_val
-                            comissao_corret += com_calc
-                            # log the computed FC and commission contribution for diagnostics
-                            try:
-                                if logger:
-                                    # summarize detalhes_retro keys and component sums
-                                    comps = {k: (v.get('componente_fc') if isinstance(v, dict) else None) for k, v in (detalhes_retro.items() if isinstance(detalhes_retro, dict) else [])}
-                                    logger.info(f"[RECONC][{proc}] item={item_fat.get('Código Produto')} colaborador={nome_col} cargo={cargo_col} fatur_item={fatur_item:.2f} taxa={taxa_rateio:.4f} pe={pe:.4f} fc_retro={fc_retro_val:.6f} com_calc={com_calc:.2f} comps={comps}")
-                            except Exception:
-                                pass
-
-                            # Build a detailed reconciliation row mirroring COMISSOES_CALCULADAS columns
-                            detail_row = {
-                                'row_type': 'detail',
-                                'MES_FATURAMENTO': mes_fat,
-                                'ANO_FATURAMENTO': ano_fat,
-                                'PROCESSO': proc,
-                                'id_colaborador': com_row.get('id_colaborador'),
-                                'nome_colaborador': com_row.get('nome_colaborador'),
-                                'cargo': com_row.get('cargo'),
-                                'cod_produto': com_row.get('cod_produto'),
-                                'descricao_produto': com_row.get('descricao_produto'),
-                                'linha': com_row.get('linha'),
-                                'grupo': com_row.get('grupo'),
-                                'subgrupo': com_row.get('subgrupo'),
-                                'tipo_mercadoria': com_row.get('tipo_mercadoria'),
-                                'faturamento_item': fatur_item,
-                                'taxa_rateio_aplicada': taxa_rateio,
-                                'percentual_elegibilidade_pe': pe,
-                                'fator_correcao_fc': fc_retro_val,
-                                'comissao_calculada_retro': com_calc
-                            }
-
-                            # Map FC component details into columns similar to COMISSOES_CALCULADAS
-                            mapping = {
-                                'faturamento_linha': 'fat_linha',
-                                'conversao_linha': 'conv_linha',
-                                'faturamento_individual': 'fat_ind',
-                                'conversao_individual': 'conv_ind',
-                                'rentabilidade': 'rentab',
-                                'retencao_clientes': 'retencao',
-                                'meta_fornecedor_1': 'forn1',
-                                'meta_fornecedor_2': 'forn2'
-                            }
-                            for comp, short in mapping.items():
-                                det = detalhes_retro.get(comp, {}) if isinstance(detalhes_retro, dict) else {}
-                                detail_row[f'peso_{short}'] = det.get('peso')
-                                # normalize rentabilidade value into decimal when relevant
-                                real_val = det.get('realizado')
-                                if comp == 'rentabilidade' and real_val is not None:
-                                    try:
-                                        rv = float(real_val)
-                                        if rv > 1 and rv <= 100:
-                                            rv = rv / 100.0
-                                        real_val = rv
-                                    except Exception:
-                                        pass
-                                detail_row[f'realizado_{short}'] = real_val
-                                detail_row[f'meta_{short}'] = det.get('meta')
-                                detail_row[f'ating_{short}'] = det.get('atingimento')
-                                detail_row[f'ating_cap_{short}'] = det.get('atingimento_cap')
-                                detail_row[f'comp_fc_{short}'] = det.get('componente_fc')
-                                if comp.startswith('meta_fornecedor'):
-                                    detail_row[f'moeda_{short}'] = det.get('moeda')
-
-                            reconc_detail_rows.append(detail_row)
-                            # aggregate component fractions and monetary contribution for retenção/fornecedores
-                            try:
-                                ret_frac = float(detalhes_retro.get('retencao_clientes', {}).get('componente_fc', 0.0) or 0.0)
-                            except Exception:
-                                ret_frac = 0.0
-                            try:
-                                forn1_frac = float(detalhes_retro.get('meta_fornecedor_1', {}).get('componente_fc', 0.0) or 0.0)
-                            except Exception:
-                                forn1_frac = 0.0
-                            try:
-                                forn2_frac = float(detalhes_retro.get('meta_fornecedor_2', {}).get('componente_fc', 0.0) or 0.0)
-                            except Exception:
-                                forn2_frac = 0.0
-
-                            comp_frac_sums['retencao'] += ret_frac
-                            comp_frac_sums['forn1'] += forn1_frac
-                            comp_frac_sums['forn2'] += forn2_frac
-
-                            comp_amt_sums['retencao'] += fatur_item * taxa_rateio * pe * ret_frac
-                            comp_amt_sums['forn1'] += fatur_item * taxa_rateio * pe * forn1_frac
-                            comp_amt_sums['forn2'] += fatur_item * taxa_rateio * pe * forn2_frac
-                        except Exception as e:
-                            self._log_validacao('AVISO', f'Erro ao calcular comissão correta retroativa para processo {proc}: {e}', {'processo': proc})
-
-                saldo = comissao_corret - total_adiant
-
-                # Atualizar estado e marcar reconciliação como realizada
-                try:
-                    if len(sidx) == 0:
-                        # incluir VALOR_TOTAL_PROCESSO a partir do arquivo de análise (soma de itens) quando possível
-                        try:
-                            total_proc = self._get_valor_total_processo(proc)
-                            if total_proc and total_proc > 0:
-                                vtp_val = float(total_proc)
-                            else:
-                                # fallback para valor vindo de status, se existente
-                                valor_total = None
-                                try:
-                                    if not df_status.empty and 'VALOR_ORIGINAL' in df_status.columns:
-                                        valor_total = row.get('VALOR_ORIGINAL')
-                                except Exception:
-                                    valor_total = None
-                                vtp_val = float(valor_total) if valor_total is not None and not pd.isna(valor_total) else 0.0
-                        except Exception:
-                            vtp_val = 0.0
-
-                        self.estado = pd.concat([self.estado, pd.DataFrame([{
-                            'PROCESSO': proc,
-                            'VALOR_TOTAL_PROCESSO': vtp_val,
-                            'TOTAL_ADIANTADO_COMISSAO': total_adiant,
-                            'STATUS_RECONCILIACAO': 'Realizada',
-                            'ULTIMA_ATUALIZACAO': datetime.now().isoformat(),
-                            'SALDO_APLICADO': saldo,
-                            'TOTAL_PAGO_ACUMULADO': 0.0,
-                            'STATUS_PROCESSO_ANALISE': status_analise
-                        }])], ignore_index=True, sort=False)
-                    else:
-                        idx0 = sidx[0]
-                        self.estado.at[idx0, 'STATUS_RECONCILIACAO'] = 'Realizada'
-                        self.estado.at[idx0, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
-                        self.estado.at[idx0, 'SALDO_APLICADO'] = saldo
-                        # garantir que STATUS_PROCESSO_ANALISE esteja atualizado
-                        try:
-                            self.estado.at[idx0, 'STATUS_PROCESSO_ANALISE'] = status_analise
-                        except Exception:
-                            pass
-                except Exception as e:
-                    self._log_validacao('AVISO', f'Erro ao atualizar estado na reconciliação do processo {proc}: {e}', {})
-
-                reconc_list.append({
-                    'PROCESSO': proc,
-                    'COMISSAO_CORRETA_TOTAL': comissao_corret,
-                    'TOTAL_ADIANTAMENTOS_PAGOS': total_adiant,
-                    'SALDO_APLICADO': saldo,
-                    'STATUS_PAGAMENTO': status_pag,
-                    'FC_RETENCAO_FRAC': comp_frac_sums.get('retencao', 0.0),
-                    'FC_FORN1_FRAC': comp_frac_sums.get('forn1', 0.0),
-                    'FC_FORN2_FRAC': comp_frac_sums.get('forn2', 0.0),
-                    'FC_RETENCAO_MONTANTE': comp_amt_sums.get('retencao', 0.0),
-                    'FC_FORN1_MONTANTE': comp_amt_sums.get('forn1', 0.0),
-                    'FC_FORN2_MONTANTE': comp_amt_sums.get('forn2', 0.0),
-                    'RENTABILIDADE_WARNINGS': hist.get('_WARNINGS_FALLBACK', '') if isinstance(hist, dict) else ''
+                saldo_final = comissao_correta_total - total_adiantado
+                self.reconciliacao_detalhada_list.extend(linhas_detalhadas)
+                self.reconciliacao_resumo_list.append({
+                    'PROCESSO': proc_str,
+                    'COMISSAO_CORRETA_TOTAL': comissao_correta_total,
+                    'TOTAL_ADIANTAMENTOS_PAGOS': total_adiantado,
+                    'SALDO_FINAL_RECONCILIACAO': saldo_final
                 })
                 try:
-                    if logger:
-                        logger.info(f"[RECONC][{proc}] resumo: comissao_corret={comissao_corret:.2f} total_adiant={total_adiant:.2f} saldo={saldo:.2f} detalhes_componentes={comp_frac_sums}")
+                    self.estado.loc[idx, 'STATUS_RECONCILIACAO'] = 'Realizada'
+                try:
+                    self.estado.loc[idx, 'STATUS_RECONCILIACAO'] = 'Realizada'
                 except Exception:
                     pass
+                print(f"  [SUCESSO] Reconciliação para {proc_str} concluída. Saldo: {saldo_final:.2f}")
+            except Exception as e:
+                print(f"  [ERRO] Falha ao processar reconciliação para {proc_str}: {e}")
+                try:
+                    self.estado.loc[idx, 'STATUS_RECONCILIACAO'] = f'Erro: {e}'
+                except Exception:
+                    pass
+                except Exception:
 
-            # Combine detailed rows with process-level summaries into a single DataFrame for output.
+
+    def _gerar_reconciliacao_detalhada_processo(self, proc_id):
+        """Calcula a comissão correta retroativa para um processo, item a item,
+        reprocessando item a item com os dados de performance históricos do mês de faturamento.
+        """
+        def _match_column(df, candidates):
+            if df is None or df.empty:
+                return None
+            normalized = { _normalize_text(col): col for col in df.columns }
+            for cand in candidates:
+                cand_norm = _normalize_text(cand)
+                if cand_norm in normalized:
+                    return normalized[cand_norm]
+            return None
+
+        def _safe_float(value):
             try:
-                df_details = pd.DataFrame(reconc_detail_rows) if reconc_detail_rows else pd.DataFrame()
-                df_summ = pd.DataFrame(reconc_list) if reconc_list else pd.DataFrame()
-                # mark summary rows explicitly
-                if not df_summ.empty:
-                    df_summ = df_summ.assign(row_type='summary')
-                # final concatenation; details first then summaries
-                if not df_details.empty and not df_summ.empty:
-                    self.reconciliacao_df = pd.concat([df_details, df_summ], ignore_index=True, sort=False)
-                elif not df_details.empty:
-                    self.reconciliacao_df = df_details
-                else:
-                    self.reconciliacao_df = df_summ
+                series_val = pd.to_numeric(pd.Series([value]), errors='coerce')
+                result = float(series_val.iloc[0])
             except Exception:
-                # fallback to previous behavior (summaries only)
-                self.reconciliacao_df = pd.DataFrame(reconc_list)
+                try:
+                    result = float(value)
+                except Exception:
+                    result = 0.0
+            return 0.0 if pd.isna(result) else float(result)
+
+        def _build_group_series(df, group_col, value_col):
+            if df is None or df.empty or group_col is None or value_col is None:
+                return pd.Series(dtype=float)
+            data = df[[group_col, value_col]].copy()
+            data[group_col] = data[group_col].astype(str).str.strip()
+            data[value_col] = pd.to_numeric(data[value_col], errors='coerce').fillna(0.0)
+            return data.groupby(group_col)[value_col].sum()
+
+        def _build_rentabilidade_series(df):
+            if df is None or df.empty:
+                return pd.Series(dtype=float)
+            linha_col = _match_column(df, ['negocio', 'negócio', 'linha'])
+            grupo_col = _match_column(df, ['grupo'])
+            subgrupo_col = _match_column(df, ['subgrupo'])
+            tipo_col = _match_column(df, ['tipo de mercadoria', 'tipo mercadoria'])
+            valor_col = _match_column(df, ['rentabilidade_realizada_pct', 'rentabilidade', 'rentabilidade realizada'])
+            if None in (linha_col, grupo_col, subgrupo_col, tipo_col, valor_col):
+                return pd.Series(dtype=float)
+            df_copy = df[[linha_col, grupo_col, subgrupo_col, tipo_col, valor_col]].copy()
+            for col in (linha_col, grupo_col, subgrupo_col, tipo_col):
+                df_copy[col] = df_copy[col].astype(str).str.strip()
+            df_copy[valor_col] = pd.to_numeric(df_copy[valor_col], errors='coerce').fillna(0.0)
+            return df_copy.set_index([linha_col, grupo_col, subgrupo_col, tipo_col])[valor_col]
+
+        def _flatten_fc_details(detalhes_fc_item):
+            mapping = {
+                'faturamento_linha': 'fat_linha',
+                'conversao_linha': 'conv_linha',
+                'faturamento_individual': 'fat_ind',
+                'conversao_individual': 'conv_ind',
+                'rentabilidade': 'rentab',
+                'retencao_clientes': 'retencao',
+                'meta_fornecedor_1': 'forn1',
+                'meta_fornecedor_2': 'forn2'
+            }
+            flattened = {}
+            for comp, short in mapping.items():
+                detalhes = detalhes_fc_item.get(comp, {}) if isinstance(detalhes_fc_item, dict) else {}
+                real_val = detalhes.get('realizado')
+                if comp == 'rentabilidade' and real_val is not None:
+                    try:
+                        rv = float(real_val)
+                        if rv > 1 and rv <= 100:
+                            real_val = rv / 100.0
+                        else:
+                            real_val = rv
+                    except Exception:
+                flattened[f'peso_{short}'] = detalhes.get('peso')
+                flattened[f'realizado_{short}'] = real_val
+                flattened[f'meta_{short}'] = detalhes.get('meta')
+                flattened[f'ating_{short}'] = detalhes.get('atingimento')
+                flattened[f'ating_cap_{short}'] = detalhes.get('atingimento_cap')
+                flattened[f'comp_fc_{short}'] = detalhes.get('componente_fc')
+                if comp.startswith('meta_fornecedor'):
+                    flattened[f'moeda_{short}'] = detalhes.get('moeda')
+            return flattened
+
+        df_analise = self.data.get('ANALISE_COMERCIAL_COMPLETA', pd.DataFrame())
+        if df_analise is None or df_analise.empty:
+            print(f"    [Reconc-Info] Processo {proc_id} não encontrado no Analise_Comercial_Completa.")
+            return [], 0.0
+
+        proc_str = str(proc_id).strip()
+        proc_col = _match_column(df_analise, ['processo'])
+        if proc_col is None:
+            print(f"    [Reconc-Erro] Coluna 'processo' não encontrada para localizar {proc_id}.")
+            return [], 0.0
+        df_itens_processo = df_analise[df_analise[proc_col].astype(str).str.strip() == proc_str].copy()
+        if df_itens_processo.empty:
+            try:
+                proc_int_str = str(int(float(proc_str)))
+                df_itens_processo = df_analise[df_analise[proc_col].astype(str).str.strip() == proc_int_str].copy()
+            except Exception:
+                df_itens_processo = pd.DataFrame()
+        if df_itens_processo.empty:
+            print(f"    [Reconc-Info] Processo {proc_id} não encontrado no Analise_Comercial_Completa.")
+            return [], 0.0
+
+        data_col = _match_column(df_itens_processo, ['dt emissão', 'dt emissao', 'data emissão', 'data emissao'])
+        if data_col is None:
+            print(f"    [Reconc-Erro] Não foi possível identificar a coluna de data de emissão para {proc_id}.")
+            return [], 0.0
+        data_emissao = pd.to_datetime(df_itens_processo[data_col].iloc[0], dayfirst=True, errors='coerce')
+        if pd.isna(data_emissao):
+            print(f"    [Reconc-Erro] Não foi possível ler Dt Emissão para {proc_id}.")
+            return [], 0.0
+        mes_fat = int(data_emissao.month)
+        ano_fat = int(data_emissao.year)
+        print(f"    [Reconc-Info] Processando {proc_id} para Mês/Ano: {mes_fat:02d}/{ano_fat}")
+
+        print(f"      Carregando dados realizados para {mes_fat:02d}/{ano_fat}...")
+        try:
+            try:
+                df_fat_hist, df_conv_hist, df_fat_ytd_hist, df_ret_hist = preparar_dados_mensais.prepare_dataframes_for_month(mes_fat, ano_fat, data_path=self.base_path)
+            except TypeError:
+                df_fat_hist, df_conv_hist, df_fat_ytd_hist, df_ret_hist = preparar_dados_mensais.prepare_dataframes_for_month(mes_fat, ano_fat)
         except Exception as e:
-            self._log_validacao('AVISO', f'Erro ao executar reconciliações: {e}', {})
-            self.reconciliacao_df = pd.DataFrame(reconc_list)
+            print(f"    [Reconc-Erro] Falha ao carregar dados históricos via preparar_dados_mensais para {mes_fat:02d}/{ano_fat}: {e}")
+            return [], 0.0
+
+        df_fat_hist = df_fat_hist if isinstance(df_fat_hist, pd.DataFrame) else pd.DataFrame()
+        df_conv_hist = df_conv_hist if isinstance(df_conv_hist, pd.DataFrame) else pd.DataFrame()
+        df_fat_ytd_hist = df_fat_ytd_hist if isinstance(df_fat_ytd_hist, pd.DataFrame) else pd.DataFrame()
+        df_ret_hist = df_ret_hist if isinstance(df_ret_hist, pd.DataFrame) else pd.DataFrame()
+
+        rent_dir = os.path.join(self.base_path, 'rentabilidades')
+        rent_xlsx = f"rentabilidade_{mes_fat:02d}_{ano_fat}_agrupada.xlsx"
+        rent_csv = f"rentabilidade_{mes_fat:02d}_{ano_fat}_agrupada.csv"
+        rent_path_xlsx = os.path.join(rent_dir, rent_xlsx)
+        rent_path_csv = os.path.join(rent_dir, rent_csv)
+        rentab_filename_used = rent_xlsx
+        try:
+            if os.path.exists(rent_path_xlsx):
+                df_rentab_hist = pd.read_excel(rent_path_xlsx, engine='openpyxl')
+                rentab_filename_used = rent_xlsx
+            elif os.path.exists(rent_path_csv):
+                df_rentab_hist = pd.read_csv(rent_path_csv, sep=';')
+                rentab_filename_used = rent_csv
+            else:
+                raise FileNotFoundError(f"Arquivo de rentabilidade não encontrado: {rent_xlsx}")
+            print(f"      Sucesso ao carregar {rentab_filename_used}")
+        except Exception as e:
+            print(f"    [Reconc-Erro] Falha ao carregar rentabilidade histórica '{rentab_filename_used}': {e}. Rentabilidade será 0.")
+            df_rentab_hist = pd.DataFrame()
+
+        col_valor_fat = _match_column(df_fat_hist, ['valor realizado', 'valor_realizado', 'valor nf', 'faturamento'])
+        col_linha_fat = _match_column(df_fat_hist, ['negocio', 'negócio', 'linha'])
+        col_consultor_fat = _match_column(df_fat_hist, ['consultor interno', 'consultor'])
+        col_valor_conv = _match_column(df_conv_hist, ['valor orçado', 'valor orcado', 'valor_orcado'])
+        col_linha_conv = _match_column(df_conv_hist, ['negocio', 'negócio', 'linha'])
+        col_consultor_conv = _match_column(df_conv_hist, ['consultor interno', 'consultor'])
+
+        realizados_hist = {
+            'faturamento_linha': _build_group_series(df_fat_hist, col_linha_fat, col_valor_fat),
+            'faturamento_individual': _build_group_series(df_fat_hist, col_consultor_fat, col_valor_fat),
+            'conversao_linha': _build_group_series(df_conv_hist, col_linha_conv, col_valor_conv),
+            'conversao_individual': _build_group_series(df_conv_hist, col_consultor_conv, col_valor_conv),
+            'rentabilidade': _build_rentabilidade_series(df_rentab_hist)
+        }
+        for key in ('faturamento_linha', 'faturamento_individual', 'conversao_linha', 'conversao_individual', 'rentabilidade'):
+            if key not in realizados_hist or realizados_hist[key] is None:
+                realizados_hist[key] = pd.Series(dtype=float)
+
+        linha_col = _match_column(df_itens_processo, ['negocio', 'negócio', 'linha'])
+        grupo_col = _match_column(df_itens_processo, ['grupo'])
+        subgrupo_col = _match_column(df_itens_processo, ['subgrupo'])
+        tipo_col = _match_column(df_itens_processo, ['tipo de mercadoria', 'tipo mercadoria'])
+        cliente_col = _match_column(df_itens_processo, ['cliente'])
+        consultor_col = _match_column(df_itens_processo, ['consultor interno', 'consultor'])
+        repres_col = _match_column(df_itens_processo, ['representante-pedido', 'representante'])
+        valor_item_col = _match_column(df_itens_processo, ['valor realizado', 'faturamento', 'valor nf'])
+        codigo_col = _match_column(df_itens_processo, ['código produto', 'codigo produto', 'cod produto', 'cod_produto'])
+        descricao_col = _match_column(df_itens_processo, ['descrição produto', 'descricao produto', 'descricao_produto'])
+
+        df_itens_processo['Processo'] = proc_str
+        df_itens_processo['Dt Emissão'] = pd.to_datetime(df_itens_processo[data_col], dayfirst=True, errors='coerce') if data_col else pd.NaT
+        if linha_col and linha_col != 'Negócio':
+            df_itens_processo['Negócio'] = df_itens_processo[linha_col]
+        elif 'Negócio' not in df_itens_processo.columns:
+            df_itens_processo['Negócio'] = ''
+        if grupo_col and grupo_col != 'Grupo':
+            df_itens_processo['Grupo'] = df_itens_processo[grupo_col]
+        elif 'Grupo' not in df_itens_processo.columns:
+            df_itens_processo['Grupo'] = ''
+        if subgrupo_col and subgrupo_col != 'Subgrupo':
+            df_itens_processo['Subgrupo'] = df_itens_processo[subgrupo_col]
+        elif 'Subgrupo' not in df_itens_processo.columns:
+            df_itens_processo['Subgrupo'] = ''
+        if tipo_col and tipo_col != 'Tipo de Mercadoria':
+            df_itens_processo['Tipo de Mercadoria'] = df_itens_processo[tipo_col]
+        elif 'Tipo de Mercadoria' not in df_itens_processo.columns:
+            df_itens_processo['Tipo de Mercadoria'] = ''
+        if cliente_col and cliente_col != 'Cliente':
+            df_itens_processo['Cliente'] = df_itens_processo[cliente_col]
+        elif 'Cliente' not in df_itens_processo.columns:
+            df_itens_processo['Cliente'] = ''
+        if consultor_col and consultor_col != 'Consultor Interno':
+            df_itens_processo['Consultor Interno'] = df_itens_processo[consultor_col]
+        elif 'Consultor Interno' not in df_itens_processo.columns:
+            df_itens_processo['Consultor Interno'] = ''
+        if repres_col and repres_col != 'Representante-pedido':
+            df_itens_processo['Representante-pedido'] = df_itens_processo[repres_col]
+        elif 'Representante-pedido' not in df_itens_processo.columns:
+            df_itens_processo['Representante-pedido'] = ''
+        if valor_item_col is None:
+            df_itens_processo['Valor Realizado'] = 0.0
+        else:
+            df_itens_processo['Valor Realizado'] = pd.to_numeric(df_itens_processo[valor_item_col], errors='coerce').fillna(0.0)
+        if codigo_col and codigo_col != 'Cód Produto':
+            df_itens_processo['Cód Produto'] = df_itens_processo[codigo_col]
+        if descricao_col and descricao_col != 'Descrição Produto':
+            df_itens_processo['Descrição Produto'] = df_itens_processo[descricao_col]
+
+        df_rc = self.data.get('RETENCAO_CLIENTES', None)
+        df_ytd = self.data.get('FATURADOS_YTD', None)
+        realizado_original = getattr(self, 'realizado', None)
+        try:
+            self.realizado = realizados_hist
+            self.data['RETENCAO_CLIENTES'] = df_ret_hist.copy() if not df_ret_hist.empty else pd.DataFrame()
+            if not df_fat_ytd_hist.empty:
+                dt_ytd_col = _match_column(df_fat_ytd_hist, ['dt emissão', 'dt emissao', 'data emissão', 'data emissao'])
+                if dt_ytd_col:
+                    df_fat_ytd_hist[dt_ytd_col] = pd.to_datetime(df_fat_ytd_hist[dt_ytd_col], dayfirst=True, errors='coerce')
+                    if dt_ytd_col != 'Dt Emissão':
+                        df_fat_ytd_hist['Dt Emissão'] = df_fat_ytd_hist[dt_ytd_col]
+            self.data['FATURADOS_YTD'] = df_fat_ytd_hist.copy() if not df_fat_ytd_hist.empty else pd.DataFrame()
+
+            df_atribuicoes = self.data.get('ATRIBUICOES', pd.DataFrame()).copy()
+            df_colabs = self.data.get('COLABORADORES', pd.DataFrame()).copy()
+            if not df_atribuicoes.empty:
+                for col in ('linha', 'grupo', 'subgrupo', 'tipo_mercadoria', 'colaborador', 'cargo'):
+                    if col in df_atribuicoes.columns:
+                        df_atribuicoes[f'__norm_{col}'] = df_atribuicoes[col].apply(_normalize_text)
+                for col in ('__norm_linha', '__norm_grupo', '__norm_subgrupo', '__norm_tipo_mercadoria', '__norm_colaborador', '__norm_cargo'):
+                    if col not in df_atribuicoes.columns:
+                        df_atribuicoes[col] = ''
+            if not df_colabs.empty:
+                if 'nome_colaborador' in df_colabs.columns:
+                    df_colabs['__norm_nome_colaborador'] = df_colabs['nome_colaborador'].apply(_normalize_text)
+                else:
+                    df_colabs['__norm_nome_colaborador'] = ''
+                if 'cargo' in df_colabs.columns:
+                    df_colabs['__norm_cargo'] = df_colabs['cargo'].apply(_normalize_text)
+                else:
+                    df_colabs['__norm_cargo'] = ''
+                if 'tipo_cargo' in df_colabs.columns:
+                    df_colabs['__norm_tipo_cargo'] = df_colabs['tipo_cargo'].apply(_normalize_text)
+                else:
+                    df_colabs['__norm_tipo_cargo'] = ''
+
+            cargos_gestao_norm = set()
+            if not df_colabs.empty:
+                cargos_gestao_norm = set(df_colabs[df_colabs['__norm_tipo_cargo'] == 'gestao']['__norm_cargo'].tolist())
+            if cargos_gestao_norm:
+                df_atribuicoes_gestao = df_atribuicoes[df_atribuicoes['__norm_cargo'].isin(cargos_gestao_norm)].copy()
+            else:
+                df_atribuicoes_gestao = pd.DataFrame(columns=df_atribuicoes.columns)
+
+            colab_info_map = {}
+            if not df_colabs.empty and '__norm_nome_colaborador' in df_colabs.columns:
+                for _, row_info in df_colabs.iterrows():
+                    norm_name = row_info.get('__norm_nome_colaborador')
+                    if norm_name and norm_name not in colab_info_map:
+                        colab_info_map[norm_name] = row_info
+
+            recebe_set_norm = {_normalize_text(nome) for nome in getattr(self, 'recebe_por_recebimento', set())}
+            linhas_reconciliacao_detalhada = []
+
+            for _, item in df_itens_processo.iterrows():
+                contexto_item = {
+                    'linha': item.get('Negócio'),
+                    'grupo': item.get('Grupo'),
+                    'subgrupo': item.get('Subgrupo'),
+                    'tipo_mercadoria': item.get('Tipo de Mercadoria')
+                }
+
+                linha_norm = _normalize_text(contexto_item['linha'])
+                grupo_norm = _normalize_text(contexto_item['grupo'])
+                subgrupo_norm = _normalize_text(contexto_item['subgrupo'])
+                tipo_norm = _normalize_text(contexto_item['tipo_mercadoria'])
+
+                if not df_atribuicoes_gestao.empty:
+                    atribuidos_gestao = df_atribuicoes_gestao[
+                        (df_atribuicoes_gestao['__norm_linha'] == linha_norm) &
+                        (df_atribuicoes_gestao['__norm_grupo'] == grupo_norm) &
+                        (df_atribuicoes_gestao['__norm_subgrupo'] == subgrupo_norm) &
+                        (df_atribuicoes_gestao['__norm_tipo_mercadoria'] == tipo_norm)
+                    ][['colaborador', 'cargo']].copy()
+                else:
+                    atribuidos_gestao = pd.DataFrame(columns=['colaborador', 'cargo'])
+
+                nomes_operacionais = []
+                for col_name in ('Consultor Interno', 'Representante-pedido'):
+                    valor = item.get(col_name)
+                    if valor is not None and str(valor).strip():
+                        nomes_operacionais.append(str(valor).strip())
+                nomes_oper_norm = {_normalize_text(n) for n in nomes_operacionais}
+                atribuidos_operacional = df_colabs[df_colabs['__norm_nome_colaborador'].isin(nomes_oper_norm)] if (nomes_oper_norm and not df_colabs.empty and '__norm_nome_colaborador' in df_colabs.columns) else pd.DataFrame(columns=['nome_colaborador', 'cargo'])
+
+                gestao_df = atribuidos_gestao[['colaborador', 'cargo']].copy() if not atribuidos_gestao.empty else pd.DataFrame(columns=['colaborador', 'cargo'])
+                if not gestao_df.empty:
+                    gestao_df['gestor'] = True
+                operacional_df = atribuidos_operacional[['nome_colaborador', 'cargo']].rename(columns={'nome_colaborador': 'colaborador'}).copy() if not atribuidos_operacional.empty else pd.DataFrame(columns=['colaborador', 'cargo'])
+                if not operacional_df.empty:
+                    operacional_df['gestor'] = False
+
+                combined = pd.concat([gestao_df, operacional_df], ignore_index=True, sort=False)
+                if combined.empty:
+                    continue
+                combined['colaborador'] = combined['colaborador'].astype(str).str.strip()
+                combined['cargo'] = combined['cargo'].astype(str).str.strip()
+                combined['__norm_colaborador'] = combined['colaborador'].apply(_normalize_text)
+                combined = combined.drop_duplicates(subset=['__norm_colaborador', 'cargo']).reset_index(drop=True)
+                combined = combined[combined['__norm_colaborador'].isin(recebe_set_norm)]
+                if combined.empty:
+                    continue
+
+                processed = set()
+                for _, colab_row in combined.iterrows():
+                    norm_name = colab_row['__norm_colaborador']
+                    if norm_name in processed:
+                        continue
+                    processed.add(norm_name)
+
+                    colab_nome = colab_row['colaborador']
+                    colab_cargo = colab_row['cargo']
+                    regra = self._get_regra_comissao(**contexto_item, cargo=colab_cargo)
+                    if regra is None:
+                        continue
+                    pe = _safe_float(regra.get('fatia_cargo_pct', 0.0)) / 100.0
+                    taxa_rateio = _safe_float(regra.get('taxa_rateio_maximo_pct', 0.0)) / 100.0
+                    faturamento_item = _safe_float(item.get('Valor Realizado', 0.0))
+                    comissao_base = faturamento_item * taxa_rateio * pe
+
+                    try:
+                        fator_correcao_final, detalhes_fc_item = self._calcular_fc_para_item(colab_nome, colab_cargo, item)
+                    except Exception as e:
+                        print(f"    [Reconc-Erro] Falha ao calcular FC para {colab_nome} no processo {proc_id}: {e}")
+                        continue
+
+                    comissao_calculada = comissao_base * fator_correcao_final
+                    colab_info = colab_info_map.get(norm_name, {})
+                    id_col = colab_info.get('id_colaborador') if isinstance(colab_info, pd.Series) else None
+                    tipo_cargo_info = colab_info.get('tipo_cargo') if isinstance(colab_info, pd.Series) else None
+                    if not isinstance(tipo_cargo_info, str) or not tipo_cargo_info.strip():
+                        tipo_cargo_info = 'Gestão' if bool(colab_row.get('gestor')) else 'Operacional'
+                    cargo_final = colab_info.get('cargo') if isinstance(colab_info, pd.Series) and isinstance(colab_info.get('cargo'), str) and colab_info.get('cargo').strip() else colab_cargo
+
+                    linha_detalhada = {
+                        'processo': proc_str,
+                        'Dt Emissão': item.get('Dt Emissão'),
+                        'Cliente': item.get('Cliente'),
+                        'Negócio': item.get('Negócio'),
+                        'Grupo': item.get('Grupo'),
+                        'Subgrupo': item.get('Subgrupo'),
+                        'Tipo de Mercadoria': item.get('Tipo de Mercadoria'),
+                        'faturamento_item': faturamento_item,
+                        'Faturamento': faturamento_item,
+                        'comissao_potencial_maxima': comissao_base,
+                        'comissao_base': comissao_base,
+                        'comissao_calculada': comissao_calculada,
+                        'fator_correcao_fc': fator_correcao_final,
+                        'fator_correcao_final': fator_correcao_final,
+                        'percentual_elegibilidade_pe': pe,
+                        'pe_aplicado': pe,
+                        'taxa_rateio_aplicada': taxa_rateio,
+                        'id_colaborador': id_col,
+                        'colaborador': colab_nome,
+                        'cargo': cargo_final,
+                        'tipo_cargo': tipo_cargo_info,
+                        'cod_produto': item.get('Cód Produto'),
+                        'descricao_produto': item.get('Descrição Produto')
+                    }
+                    linha_detalhada.update(_flatten_fc_details(detalhes_fc_item))
+                    linhas_reconciliacao_detalhada.append(linha_detalhada)
+        finally:
+            self.realizado = realizado_original
+            self.data['RETENCAO_CLIENTES'] = df_rc
+            self.data['FATURADOS_YTD'] = df_ytd
+
+        comissao_correta_total = sum(_safe_float(row.get('comissao_calculada', 0.0)) for row in linhas_reconciliacao_detalhada)
+        return linhas_reconciliacao_detalhada, comissao_correta_total
 
     def _get_regra_comissao(self, linha, grupo, subgrupo, tipo_mercadoria, cargo):
-        """Busca a regra de comissão com base na hierarquia de especificidade."""
+        """Busca a regra de comissão aplicável considerando hierarquia de especificidade."""
         chave_cache = (linha, grupo, subgrupo, tipo_mercadoria, cargo)
         if chave_cache in self.cache_regras:
             return self.cache_regras[chave_cache]
 
-        df_regras = self.data['CONFIG_COMISSAO']
+        df_regras = self.data.get('CONFIG_COMISSAO', pd.DataFrame())
+        if df_regras.empty:
+            self._log_validacao('ERRO', "Tabela CONFIG_COMISSAO indisponível para cálculo de regras.", {})
+            self.cache_regras[chave_cache] = None
+            return None
+
         filtros = [
             (df_regras['linha'] == linha) & (df_regras['grupo'] == grupo) & (df_regras['subgrupo'] == subgrupo) & (df_regras['tipo_mercadoria'] == tipo_mercadoria),
-            (df_regras['linha'] == linha) & (df_regras['grupo'] == grupo) & (df_regras['subgrupo'].isnull() | (df_regras['subgrupo'] == self.legacy_token)) & (df_regras['tipo_mercadoria'] == tipo_mercadoria),
-            (df_regras['linha'] == linha) & (df_regras['grupo'].isnull() | (df_regras['grupo'] == self.legacy_token)) & (df_regras['subgrupo'].isnull() | (df_regras['subgrupo'] == self.legacy_token)) & (df_regras['tipo_mercadoria'] == tipo_mercadoria),
+            (df_regras['linha'] == linha) & (df_regras['grupo'] == grupo) & ((df_regras['subgrupo'].isna()) | (df_regras['subgrupo'] == self.legacy_token)) & (df_regras['tipo_mercadoria'] == tipo_mercadoria),
+            (df_regras['linha'] == linha) & ((df_regras['grupo'].isna()) | (df_regras['grupo'] == self.legacy_token)) &
+            ((df_regras['subgrupo'].isna()) | (df_regras['subgrupo'] == self.legacy_token)) & (df_regras['tipo_mercadoria'] == tipo_mercadoria),
             (df_regras['linha'] == self.legacy_token) & (df_regras['tipo_mercadoria'] == self.legacy_token)
         ]
-        
-        for filtro in filtros:
-            regra = df_regras[filtro & (df_regras['cargo'] == cargo)]
-            if not regra.empty:
-                self.cache_regras[chave_cache] = regra.iloc[0]
-                return regra.iloc[0]
 
-        self._log_validacao('ERRO', f"Nenhuma regra de comissão encontrada.", {"linha": linha, "grupo": grupo, "subgrupo": subgrupo, "tipo_mercadoria": tipo_mercadoria, "cargo": cargo})
+        for filtro in filtros:
+            try:
+                regra = df_regras[filtro & (df_regras['cargo'] == cargo)]
+            except Exception:
+                regra = pd.DataFrame()
+            if not regra.empty:
+                regra_row = regra.iloc[0]
+                self.cache_regras[chave_cache] = regra_row
+                return regra_row
+
+        self._log_validacao('ERRO', 'Nenhuma regra de comissão encontrada.', {
+            "linha": linha, "grupo": grupo, "subgrupo": subgrupo, "tipo_mercadoria": tipo_mercadoria, "cargo": cargo
+        })
         self.cache_regras[chave_cache] = None
         return None
-
-    def _prepare_historic_for_process(self, mes_fat, ano_fat):
-        """Helper to build historic data dict for a given faturamento month/year.
-
-        Returns (hist, warnings_list)
-        """
-        hist = {}
-        warnings_proc = []
-        try:
-            try:
-                import preparar_dados_mensais as prep
-            except Exception:
-                prep = None
-            if prep and mes_fat and ano_fat:
-                try:
-                    faturados_df, conversoes_df, faturados_ytd_df, retencao_df = prep.prepare_dataframes_for_month(int(mes_fat), int(ano_fat))
-                    hist['FATURADOS'] = faturados_df if faturados_df is not None else pd.DataFrame()
-                    hist['CONVERSOES'] = conversoes_df if conversoes_df is not None else pd.DataFrame()
-                    hist['FATURADOS_YTD'] = faturados_ytd_df if faturados_ytd_df is not None else pd.DataFrame()
-                    hist['RETENCAO_CLIENTES'] = retencao_df if retencao_df is not None else pd.DataFrame()
-                except Exception as e_tmp:
-                    hist = {}
-                    warnings_proc.append(f"Falha ao gerar dados temporários do preparador para {mes_fat}/{ano_fat}: {e_tmp}")
-
-            # Load meta sheets from Regras for use in retroativo calculation
-            try:
-                regras = pd.read_excel(ARQUIVO_REGRAS_XLSX, sheet_name=None)
-                hist['METAS_APLICACAO'] = regras.get('METAS_APLICACAO', pd.DataFrame())
-                hist['METAS_INDIVIDUAIS'] = regras.get('METAS_INDIVIDUAIS', pd.DataFrame())
-                hist['META_RENTABILIDADE'] = regras.get('META_RENTABILIDADE', pd.DataFrame())
-                hist['METAS_FORNECEDORES'] = regras.get('METAS_FORNECEDORES', pd.DataFrame())
-            except Exception as e_rules:
-                hist.setdefault('METAS_APLICACAO', pd.DataFrame())
-                hist.setdefault('METAS_INDIVIDUAIS', pd.DataFrame())
-                hist.setdefault('META_RENTABILIDADE', pd.DataFrame())
-                hist.setdefault('METAS_FORNECEDORES', pd.DataFrame())
-                warnings_proc.append(f"Falha ao ler regras (metas) para histórico: {e_rules}")
-
-            # Load rentabilidade for the specific month from rentabilidades/ if present; otherwise fallback
-            meses_pt = [None, 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
-            month_name = meses_pt[int(mes_fat)] if mes_fat and 1 <= int(mes_fat) <= 12 else None
-            rent_df = pd.DataFrame()
-            try:
-                rent_dir = os.path.join(os.getcwd(), 'rentabilidades')
-                if month_name and ano_fat:
-                    candidate = os.path.join(rent_dir, f"Rentabilidade_Realizada_{month_name}_{ano_fat}.xlsx")
-                    if os.path.exists(candidate):
-                        rent_df = pd.read_excel(candidate)
-                    else:
-                        # fallback: pick most recent rentabilidade file <= target month/year
-                        if os.path.isdir(rent_dir):
-                            candidates = [f for f in os.listdir(rent_dir) if f.lower().startswith('rentabilidade_realizada')]
-                            best = None
-                            best_tuple = (0,0)
-                            try:
-                                target_year = int(ano_fat) if ano_fat is not None else None
-                            except Exception:
-                                target_year = None
-                            try:
-                                target_month = int(mes_fat) if mes_fat is not None else None
-                            except Exception:
-                                target_month = None
-
-                            for fname in candidates:
-                                try:
-                                    parts = fname.replace('.xlsx','').split('_')
-                                    fyear = int(parts[-1])
-                                    fmonth_name = parts[-2]
-                                    if fmonth_name in meses_pt:
-                                        fmonth = meses_pt.index(fmonth_name)
-                                    else:
-                                        fmonth = 0
-                                    if target_year is None or target_month is None:
-                                        if (fyear, fmonth) > best_tuple:
-                                            best_tuple = (fyear, fmonth)
-                                            best = fname
-                                    else:
-                                        if (fyear < target_year) or (fyear == target_year and fmonth <= target_month):
-                                            if (fyear, fmonth) > best_tuple:
-                                                best_tuple = (fyear, fmonth)
-                                                best = fname
-                                except Exception:
-                                    continue
-                            if best:
-                                try:
-                                    rent_df = pd.read_excel(os.path.join(rent_dir, best))
-                                except Exception:
-                                    rent_df = pd.DataFrame()
-                if rent_df.empty and os.path.exists(ARQUIVO_RENTABILIDADE):
-                    try:
-                        rent_df = pd.read_excel(ARQUIVO_RENTABILIDADE)
-                        warnings_proc.append(f"Rentabilidade para {month_name} {ano_fat} não encontrada em rentabilidades/; usando {ARQUIVO_RENTABILIDADE} como fallback.")
-                    except Exception:
-                        rent_df = pd.DataFrame()
-                elif rent_df.empty:
-                    warnings_proc.append(f"Rentabilidade para {month_name} {ano_fat} não encontrada; nenhum arquivo de rentabilidade disponível.")
-            except Exception as e_rent:
-                warnings_proc.append(f"Erro ao carregar rentabilidade: {e_rent}")
-            hist['RENTABILIDADE_REALIZADA'] = rent_df if not rent_df.empty else pd.DataFrame()
-
-            # Ensure conversoes/faturados keys exist even if empty
-            hist.setdefault('CONVERSOES', hist.get('CONVERSOES', pd.DataFrame()))
-            hist.setdefault('FATURADOS', hist.get('FATURADOS', pd.DataFrame()))
-            hist.setdefault('FATURADOS_YTD', hist.get('FATURADOS_YTD', pd.DataFrame()))
-            hist.setdefault('RETENCAO_CLIENTES', hist.get('RETENCAO_CLIENTES', pd.DataFrame()))
-
-            # If we couldn't build anything meaningful, fallback to the disk-based loader
-            if not any(isinstance(v, pd.DataFrame) and not v.empty for v in hist.values()):
-                hist = self._load_historic_files(mes_fat, ano_fat)
-                if warnings_proc:
-                    hist['_WARNINGS_FALLBACK'] = '; '.join(warnings_proc)
-        except Exception:
-            hist = self._load_historic_files(mes_fat, ano_fat)
-        return hist, warnings_proc
-
-    def _sync_estado_from_inputs(self):
-        """Ensure `self.estado` contains processes from RECEBIMENTOS and is annotated with
-        STATUS_PAGAMENTO (from STATUS_PAGAMENTOS) and STATUS_PROCESSO_ANALISE (from ANALISE_COMERCIAL_COMPLETA).
-        This makes `estado` the single source of truth for reconciliation decisions.
-        """
-        try:
-            if not hasattr(self, 'estado') or self.estado is None:
-                self.estado = pd.DataFrame(columns=['PROCESSO', 'VALOR_TOTAL_PROCESSO', 'TOTAL_PAGO_ACUMULADO', 'TOTAL_ADIANTADO_COMISSAO', 'STATUS_RECONCILIACAO', 'STATUS_PROCESSO_ANALISE', 'ULTIMA_ATUALIZACAO'])
-
-            df_receb = self.data.get('RECEBIMENTOS', pd.DataFrame())
-            df_status = self.data.get('STATUS_PAGAMENTOS', pd.DataFrame())
-            df_anal = self.data.get('ANALISE_COMERCIAL_COMPLETA', pd.DataFrame())
-
-            # Add any process present in RECEBIMENTOS but missing in estado
-            try:
-                recib_procs = []
-                if not df_receb.empty and 'PROCESSO' in df_receb.columns:
-                    recib_procs = [int(x) if not pd.isna(x) else None for x in pd.to_numeric(df_receb['PROCESSO'], errors='coerce').dropna().unique()]
-                for p in recib_procs:
-                    if p is None:
-                        continue
-                    if not ((self.estado['PROCESSO'] == p).any()):
-                        # try to get total valor from ANALISE_COMERCIAL_COMPLETA
-                        vtp = 0.0
-                        try:
-                            if not df_anal.empty and 'Processo' in df_anal.columns:
-                                sel = df_anal[pd.to_numeric(df_anal['Processo'], errors='coerce') == int(p)]
-                                if not sel.empty:
-                                    for col in ('Valor Realizado','Valor Orçado','Valor Orcado','Valor Realizado '):
-                                        if col in sel.columns:
-                                            vtp = float(pd.to_numeric(sel[col], errors='coerce').fillna(0).sum())
-                                            break
-                        except Exception:
-                            vtp = 0.0
-                        new_row = {
-                            'PROCESSO': p,
-                            'VALOR_TOTAL_PROCESSO': vtp,
-                            'TOTAL_PAGO_ACUMULADO': 0.0,
-                            'TOTAL_ADIANTADO_COMISSAO': 0.0,
-                            'STATUS_RECONCILIACAO': 'Nao Realizada',
-                            'STATUS_PROCESSO_ANALISE': None,
-                            'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
-                        }
-                        self.estado = pd.concat([self.estado, pd.DataFrame([new_row])], ignore_index=True, sort=False)
-            except Exception:
-                pass
-
-            # Populate STATUS_PAGAMENTO from STATUS_PAGAMENTOS into estado (tolerant matching)
-            try:
-                if not df_status.empty and 'PROCESSO' in df_status.columns:
-                    # iterate estado rows and try to find matching row in df_status
-                    for i in self.estado.index:
-                        try:
-                            p = self.estado.at[i, 'PROCESSO']
-                            if pd.isna(p):
-                                continue
-                            p_s = str(p).strip()
-                            # exact match
-                            mask_exact = df_status['PROCESSO'] == p
-                            if mask_exact.any():
-                                r = df_status[mask_exact].iloc[0]
-                                self.estado.at[i, 'STATUS_PAGAMENTO'] = r.get('STATUS_PAGAMENTO')
-                                continue
-                            # contains match (either direction)
-                            try:
-                                mask_contains = df_status['PROCESSO'].astype(str).apply(lambda x: p_s in x)
-                                mask_rev = df_status['PROCESSO'].astype(str).apply(lambda x: str(x) in p_s)
-                                mask = mask_contains | mask_rev
-                                if mask.any():
-                                    r = df_status[mask].iloc[0]
-                                    self.estado.at[i, 'STATUS_PAGAMENTO'] = r.get('STATUS_PAGAMENTO')
-                            except Exception:
-                                pass
-                        except Exception:
-                            continue
-            except Exception:
-                pass
-
-            # Populate STATUS_PROCESSO_ANALISE from ANALISE_COMERCIAL_COMPLETA (tolerant)
-            try:
-                if not df_anal.empty and 'Processo' in df_anal.columns and 'Status Processo' in df_anal.columns:
-                    df_anal['PROC_NUM'] = pd.to_numeric(df_anal['Processo'], errors='coerce')
-                    for i in self.estado.index:
-                        try:
-                            p = self.estado.at[i, 'PROCESSO']
-                            if pd.isna(p):
-                                continue
-                            p_s = str(p).strip()
-                            sel = df_anal[df_anal['PROC_NUM'] == float(p)]
-                            if sel.empty:
-                                # try exact string match
-                                sel = df_anal[df_anal['Processo'].astype(str).str.strip() == p_s]
-                            if sel.empty:
-                                # try contains both directions
-                                try:
-                                    mask_contains = df_anal['Processo'].astype(str).apply(lambda x: p_s in x)
-                                    mask_rev = df_anal['Processo'].astype(str).apply(lambda x: str(x) in p_s)
-                                    mask = mask_contains | mask_rev
-                                    sel = df_anal[mask]
-                                except Exception:
-                                    sel = pd.DataFrame()
-                            if not sel.empty:
-                                self.estado.at[i, 'STATUS_PROCESSO_ANALISE'] = sel.iloc[0].get('Status Processo')
-                        except Exception:
-                            continue
-            except Exception:
-                pass
-
-            # Update TOTAL_ADIANTADO_COMISSAO from comissoes_recebimento_df if available
-            try:
-                if hasattr(self, 'comissoes_recebimento_df') and self.comissoes_recebimento_df is not None and not self.comissoes_recebimento_df.empty:
-                    soma_proc = self.comissoes_recebimento_df.groupby('processo', dropna=False)['comissao_calculada'].sum().to_dict()
-                    for i in self.estado.index:
-                        try:
-                            p = self.estado.at[i, 'PROCESSO']
-                            if p in soma_proc:
-                                self.estado.at[i, 'TOTAL_ADIANTADO_COMISSAO'] = float(soma_proc[p])
-                        except Exception:
-                            continue
-            except Exception:
-                pass
-
-            # Record update timestamp
-            try:
-                for i in self.estado.index:
-                    try:
-                        self.estado.at[i, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        except Exception:
-            # if anything fails, ensure estado exists
-            if not hasattr(self, 'estado') or self.estado is None:
-                self.estado = pd.DataFrame()
-
-    # ---------- Helpers para reconciliação retroativa ----------
-    def _load_historic_files(self, mes, ano):
-        """Carrega os arquivos de metas/rentabilidade/conversões para o mês/ano especificado.
-
-        Retorna um dicionário com chaves: 'METAS_APLICACAO', 'METAS_INDIVIDUAIS', 'META_RENTABILIDADE',
-        'CONVERSOES', 'RENTABILIDADE_REALIZADA' (quando aplicável). Caso não encontre, retorna DataFrames vazios.
-        """
-        result = {}
-        try:
-            # normalize inputs
-            try:
-                mes_int = int(mes) if mes is not None else None
-            except Exception:
-                mes_int = None
-            try:
-                ano_int = int(ano) if ano is not None else None
-            except Exception:
-                ano_int = None
-
-            # First attempt: use the preparer module if available (preferred, returns consistent DataFrames)
-            try:
-                import preparar_dados_mensais as prep
-                if hasattr(prep, 'prepare_dataframes_for_month') and mes_int and ano_int:
-                    try:
-                        faturados_df, conversoes_df, faturados_ytd_df, retencao_df = prep.prepare_dataframes_for_month(int(mes_int), int(ano_int))
-                        result['FATURADOS'] = faturados_df if faturados_df is not None else pd.DataFrame()
-                        result['CONVERSOES'] = conversoes_df if conversoes_df is not None else pd.DataFrame()
-                        result['FATURADOS_YTD'] = faturados_ytd_df if faturados_ytd_df is not None else pd.DataFrame()
-                        result['RETENCAO_CLIENTES'] = retencao_df if retencao_df is not None else pd.DataFrame()
-                    except Exception:
-                        # preparer failed; fall back to disk-based reads below
-                        result = {}
-                else:
-                    result = {}
-            except Exception:
-                result = {}
-
-            # helper to read files safely
-            def try_read(path):
-                try:
-                    if path and os.path.exists(path):
-                        return pd.read_excel(path, parse_dates=True)
-                except Exception:
-                    return pd.DataFrame()
-                return pd.DataFrame()
-
-            # If preparer didn't populate result, attempt convention-based file loads
-            if not result:
-                meses_pt = [None, 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
-                month_name = meses_pt[mes_int] if mes_int and 1 <= int(mes_int) <= 12 else None
-
-                # candidate filenames
-                faturados_name = f"Faturados {month_name} {ano_int}.xlsx" if month_name and ano_int else ARQUIVO_FATURADOS
-                conversoes_name = f"Conversões {month_name} {ano_int}.xlsx" if month_name and ano_int else ARQUIVO_CONVERSOES
-                faturados_ytd_name = f"Faturados_YTD_{month_name}_{ano_int}.xlsx" if month_name and ano_int else ARQUIVO_FATURADOS_YTD
-
-                # Preferred rentabilidade naming used in repository: rentabilidades/rentabilidade_{MM}_{AAAA}_agrupada.xlsx
-                rent_df = pd.DataFrame()
-                try:
-                    rent_dir = os.path.join(os.getcwd(), 'rentabilidades')
-                    if mes_int and ano_int and os.path.isdir(rent_dir):
-                        mm = f"{int(mes_int):02d}"
-                        candidate_names = [
-                            os.path.join(rent_dir, f"rentabilidade_{mm}_{ano_int}_agrupada.xlsx"),
-                            os.path.join(rent_dir, f"rentabilidade_{mm}_{ano_int}.xlsx"),
-                            os.path.join(rent_dir, f"Rentabilidade_Realizada_{month_name}_{ano_int}.xlsx")
-                        ]
-                        for c in candidate_names:
-                            if os.path.exists(c):
-                                try:
-                                    rent_df = pd.read_excel(c)
-                                    break
-                                except Exception:
-                                    rent_df = pd.DataFrame()
-
-                except Exception:
-                    rent_df = pd.DataFrame()
-
-                # fallback to file names in cwd if not found in rentabilidades/
-                if rent_df.empty:
-                    try:
-                        rentab_name = f"Rentabilidade_Realizada_{month_name}_{ano_int}.xlsx" if month_name and ano_int else ARQUIVO_RENTABILIDADE
-                        rent_df = try_read(rentab_name)
-                        if rent_df.empty and os.path.exists(ARQUIVO_RENTABILIDADE):
-                            rent_df = try_read(ARQUIVO_RENTABILIDADE)
-                    except Exception:
-                        rent_df = pd.DataFrame()
-
-                result['RENTABILIDADE_REALIZADA'] = rent_df if not rent_df.empty else pd.DataFrame()
-
-                result['CONVERSOES'] = try_read(conversoes_name) if not try_read(conversoes_name).empty else (try_read(ARQUIVO_CONVERSOES) if os.path.exists(ARQUIVO_CONVERSOES) else pd.DataFrame())
-                result['FATURADOS'] = try_read(faturados_name) if not try_read(faturados_name).empty else (try_read(ARQUIVO_FATURADOS) if os.path.exists(ARQUIVO_FATURADOS) else pd.DataFrame())
-                result['FATURADOS_YTD'] = try_read(faturados_ytd_name) if not try_read(faturados_ytd_name).empty else (try_read(ARQUIVO_FATURADOS_YTD) if os.path.exists(ARQUIVO_FATURADOS_YTD) else pd.DataFrame())
-
-                # load rules (metas) from ARQUIVO_REGRAS_XLSX
-                try:
-                    regras = pd.read_excel(ARQUIVO_REGRAS_XLSX, sheet_name=None)
-                    result['METAS_APLICACAO'] = regras.get('METAS_APLICACAO', pd.DataFrame())
-                    result['METAS_INDIVIDUAIS'] = regras.get('METAS_INDIVIDUAIS', pd.DataFrame())
-                    result['META_RENTABILIDADE'] = regras.get('META_RENTABILIDADE', pd.DataFrame())
-                    result['METAS_FORNECEDORES'] = regras.get('METAS_FORNECEDORES', pd.DataFrame())
-                except Exception:
-                    result['METAS_APLICACAO'] = pd.DataFrame()
-                    result['METAS_INDIVIDUAIS'] = pd.DataFrame()
-                    result['META_RENTABILIDADE'] = pd.DataFrame()
-                    result['METAS_FORNECEDORES'] = pd.DataFrame()
-
-                # tentativa de ler retenção histórica
-                try:
-                    ret_name = f"Retencao_Clientes_{month_name}_{ano_int}.xlsx" if month_name and ano_int else ARQUIVO_RETENCAO
-                    ret_df = try_read(ret_name)
-                    if ret_df.empty and os.path.exists(ARQUIVO_RETENCAO):
-                        ret_df = try_read(ARQUIVO_RETENCAO)
-                    result['RETENCAO_CLIENTES'] = ret_df if not ret_df.empty else pd.DataFrame()
-                except Exception:
-                    result['RETENCAO_CLIENTES'] = pd.DataFrame()
-
-        except Exception:
-            # qualquer falha -> objetos vazios
-            result = {k: pd.DataFrame() for k in ['METAS_APLICACAO', 'METAS_INDIVIDUAIS', 'META_RENTABILIDADE', 'CONVERSOES', 'RENTABILIDADE_REALIZADA', 'FATURADOS', 'FATURADOS_YTD', 'RETENCAO_CLIENTES', 'METAS_FORNECEDORES']}
-        return result
-
-    def _calcular_fc_retroativo_for_item(self, nome_colab, cargo_colab, item_faturado, historic_data, mes_fat, ano_fat):
-        """Calcula o FC para um item usando os dados históricos (metas do mês/ano de faturamento).
-
-        historic_data: dict retornado por _load_historic_files
-        mes_fat, ano_fat: usado para qualquer agregação temporal necessária (pode ser None)
-        Retorna um float representando o FC (entre 0 e cap_fc).
-        """
-        try:
-            # Simplificação: replicar a lógica de _calcular_fc_para_item mas usando os DataFrames históricos
-            # Inicializar detalhes para retorno em caso de saída precoce
-            detalhes_fc = {
-                'faturamento_linha': {},
-                'conversao_linha': {},
-                'faturamento_individual': {},
-                'conversao_individual': {},
-                'rentabilidade': {},
-                'retencao_clientes': {},
-                'meta_fornecedor_1': {},
-                'meta_fornecedor_2': {}
-            }
-            # Extrair pesos
-            pesos_df = self.data.get('PESOS_METAS', pd.DataFrame())
-            if pesos_df.empty:
-                # no pesos defined -> neutral FC of 1.0; return empty detalhes
-                return 1.0, detalhes_fc
-            pesos = pesos_df[pesos_df['cargo'] == cargo_colab]
-            logger = getattr(self, '_logger', None)
-            try:
-                if logger and logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"_calcular_fc_retroativo_for_item: buscando pesos para cargo='{cargo_colab}' (found={not pesos.empty})")
-            except Exception:
-                pass
-            if pesos.empty:
-                return 1.0, detalhes_fc
-            pesos = pesos.iloc[0]
-
-            fc_total = 0.0
-            # detalhe por componente para retorno (inicializa com chaves esperadas)
-            detalhes_fc = {
-                'faturamento_linha': {},
-                'conversao_linha': {},
-                'faturamento_individual': {},
-                'conversao_individual': {},
-                'rentabilidade': {},
-                'retencao_clientes': {},
-                'meta_fornecedor_1': {},
-                'meta_fornecedor_2': {}
-            }
-            # Para cada tipo_meta semelhante ao método principal, buscar valores históricos
-            metas_config = {
-                'faturamento_linha': ('faturamento_linha', (item_faturado.get('Negócio'), item_faturado.get('Tipo de Mercadoria'))),
-                'conversao_linha': ('conversao_linha', (item_faturado.get('Negócio'), item_faturado.get('Tipo de Mercadoria'))),
-                'faturamento_individual': ('faturamento_individual', nome_colab),
-                'conversao_individual': ('conversao_individual', nome_colab),
-                'rentabilidade': ('rentabilidade', (item_faturado.get('Negócio'), item_faturado.get('Grupo'), item_faturado.get('Subgrupo'), item_faturado.get('Tipo de Mercadoria'))),
-                # incluir retenção e metas por fornecedor no cálculo retroativo
-                'retencao_clientes': ('retencao_clientes', (item_faturado.get('Negócio'),)),
-                'meta_fornecedor_1': ('meta_fornecedor_1', (item_faturado.get('Negócio'), 1)),
-                'meta_fornecedor_2': ('meta_fornecedor_2', (item_faturado.get('Negócio'), 2))
-            }
-
-            # helper local para pegar realizado/historical meta usando arquivos históricos carregados
-            def _get_realizado_historico(key, chave):
-                try:
-                    if key == 'faturamento_linha':
-                        dff = historic_data.get('FATURADOS', pd.DataFrame())
-                        if dff.empty:
-                            return float(self.realizado['faturamento_linha'].get(chave[0], 0)) if hasattr(self, 'realizado') else 0.0
-                        # somar Valor Realizado até o mês mes_fat (assumimos que Dt Emissão existe)
-                        if 'Dt Emissão' in dff.columns:
-                            df_sel = dff[dff['Fabricante'].notna() | dff['Negócio'].notna()]
-                            # filtrar por linha
-                            dfl = dff[dff['Negócio'] == chave[0]]
-                            if dfl.empty:
-                                return 0.0
-                            if mes_fat:
-                                dfl['mes'] = pd.to_datetime(dfl['Dt Emissão']).dt.month
-                                fatur = dfl[dfl['mes'] <= int(mes_fat)]['Valor Realizado'].sum()
-                            else:
-                                fatur = dfl['Valor Realizado'].sum()
-                            return float(fatur)
-                        else:
-                            return 0.0
-                    if key == 'faturamento_individual':
-                        dff = historic_data.get('FATURADOS', pd.DataFrame())
-                        if dff.empty:
-                            return float(self.realizado['faturamento_individual'].get(chave, 0)) if hasattr(self, 'realizado') else 0.0
-                        dfp = dff[dff['Consultor Interno'] == chave]
-                        if dfp.empty:
-                            return 0.0
-                        if 'Dt Emissão' in dfp.columns and mes_fat:
-                            dfp['mes'] = pd.to_datetime(dfp['Dt Emissão']).dt.month
-                            return float(dfp[dfp['mes'] <= int(mes_fat)]['Valor Realizado'].sum())
-                        return float(dfp['Valor Realizado'].sum())
-                    if key == 'conversao_linha':
-                        dconv = historic_data.get('CONVERSOES', pd.DataFrame())
-                        if dconv.empty:
-                            return float(self.realizado['conversao_linha'].get(chave[0], 0)) if hasattr(self, 'realizado') else 0.0
-                        dfl = dconv[dconv['Negócio'] == chave[0]]
-                        if dfl.empty:
-                            return 0.0
-                        if 'Dt Emissão' in dfl.columns and mes_fat:
-                            dfl['mes'] = pd.to_datetime(dfl['Dt Emissão']).dt.month
-                            return float(dfl[dfl['mes'] <= int(mes_fat)]['Valor Orçado'].sum())
-                        return float(dfl['Valor Orçado'].sum())
-                    if key == 'conversao_individual':
-                        dconv = historic_data.get('CONVERSOES', pd.DataFrame())
-                        if dconv.empty:
-                            return float(self.realizado['conversao_individual'].get(chave, 0)) if hasattr(self, 'realizado') else 0.0
-                        dfl = dconv[dconv['Consultor Interno'] == chave]
-                        if dfl.empty:
-                            return 0.0
-                        if 'Dt Emissão' in dfl.columns and mes_fat:
-                            dfl['mes'] = pd.to_datetime(dfl['Dt Emissão']).dt.month
-                            return float(dfl[dfl['mes'] <= int(mes_fat)]['Valor Orçado'].sum())
-                        return float(dfl['Valor Orçado'].sum())
-                    if key == 'rentabilidade':
-                        dr = historic_data.get('RENTABILIDADE_REALIZADA', pd.DataFrame())
-                        if dr.empty:
-                            return float(self.realizado['rentabilidade'].get(chave, 0)) if hasattr(self, 'realizado') else 0.0
-                        sel = dr[(dr.get('linha') == chave[0]) & (dr.get('Grupo') == chave[1]) & (dr.get('Subgrupo') == chave[2]) & (dr.get('Tipo de Mercadoria') == chave[3])] if not dr.empty else pd.DataFrame()
-                        if sel.empty:
-                            return 0.0
-                        return float(sel.iloc[0].get('rentabilidade_realizada_pct') or 0.0)
-                except Exception:
-                    return 0.0
-
-            for tipo_meta, (realizado_key, meta_chave) in metas_config.items():
-                peso = pesos.get(tipo_meta, 0) / 100.0
-                if peso == 0:
-                    continue
-                realizado = _get_realizado_historico(realizado_key, meta_chave)
-                # buscar meta histórica (simplificação: tentamos nas tabelas de regras carregadas)
-                meta = None
-                try:
-                    if realizado_key in ['faturamento_linha', 'conversao_linha']:
-                        dfm = historic_data.get('METAS_APLICACAO', pd.DataFrame())
-                        if not dfm.empty and isinstance(meta_chave, tuple):
-                            linha, tipo = meta_chave
-                            sel = dfm[(dfm.get('linha') == linha) & (dfm.get('tipo_mercadoria') == tipo) & (dfm.get('tipo_meta') == realizado_key.replace('_linha',''))]
-                            if not sel.empty:
-                                meta = sel.iloc[0].get('valor_meta')
-                    elif realizado_key in ['faturamento_individual','conversao_individual']:
-                        dfm = historic_data.get('METAS_INDIVIDUAIS', pd.DataFrame())
-                        if not dfm.empty:
-                            sel = dfm[(dfm.get('colaborador') == meta_chave) & (dfm.get('tipo_meta') == realizado_key.replace('_individual',''))]
-                            if not sel.empty:
-                                meta = sel.iloc[0].get('valor_meta')
-                    elif realizado_key == 'rentabilidade':
-                        dfm = historic_data.get('META_RENTABILIDADE', pd.DataFrame())
-                        if not dfm.empty and isinstance(meta_chave, tuple):
-                            l,g,s,t = meta_chave
-                            sel = dfm[(dfm.get('linha') == l) & (dfm.get('grupo') == g) & (dfm.get('subgrupo') == s) & (dfm.get('tipo_mercadoria') == t)]
-                            if not sel.empty:
-                                meta = sel.iloc[0].get('meta_rentabilidade_alvo_pct')
-                except Exception:
-                    meta = None
-
-                try:
-                    atingimento = (realizado / meta) if meta and meta > 0 else 0
-                except Exception:
-                    atingimento = 0
-
-                cap_atingimento = float(self.params.get('cap_atingimento_max', 1.0))
-                atingimento_cap = min(atingimento, cap_atingimento)
-                componente_fc = atingimento_cap * peso
-                fc_total += componente_fc
-                # armazenar detalhe deste componente
-                detalhes_fc[tipo_meta] = {
-                    'peso': peso,
-                    'realizado': realizado,
-                    'meta': meta,
-                    'atingimento': atingimento,
-                    'atingimento_cap': atingimento_cap,
-                    'componente_fc': componente_fc
-                }
-
-            cap_fc = float(self.params.get('cap_fc_max', 1.0))
-            # --- Retenção de clientes (retroativo) ---
-            try:
-                if cargo_colab == 'Gerente Linha':
-                    # determinar linhas do gerente a partir das atribuições atuais
-                    df_atr = self.data.get('ATRIBUICOES', pd.DataFrame())
-                    linhas_do_gerente = df_atr[df_atr['colaborador'] == nome_colab]['linha'].dropna().unique() if not df_atr.empty else []
-                    if len(linhas_do_gerente) > 0:
-                        linha_gerente = linhas_do_gerente[0]
-                        df_ret = historic_data.get('RETENCAO_CLIENTES', pd.DataFrame())
-                        if not df_ret.empty:
-                            ret_row = df_ret[df_ret['linha'] == linha_gerente]
-                            if not ret_row.empty:
-                                clientes_ant = ret_row.iloc[0].get('clientes_mes_anterior', None)
-                                clientes_atual = ret_row.iloc[0].get('clientes_mes_atual', None)
-                                try:
-                                    if clientes_ant is None or pd.isna(clientes_ant) or float(clientes_ant) == 0:
-                                        taxa_retencao = 0.0
-                                    else:
-                                        taxa_retencao = float(clientes_atual) / float(clientes_ant)
-                                except Exception:
-                                    taxa_retencao = 0.0
-
-                                peso_ret = 0.0
-                                pesos_df = self.data.get('PESOS_METAS', pd.DataFrame())
-                                if not pesos_df.empty and 'retencao_clientes' in pesos_df.columns:
-                                    row_peso = pesos_df[pesos_df['cargo'] == cargo_colab]
-                                    if not row_peso.empty:
-                                        peso_ret = float(row_peso.iloc[0].get('retencao_clientes', 0)) / 100.0
-
-                                cap_atingimento = float(self.params.get('cap_atingimento_max', 1.0))
-                                atingimento_cap = min(taxa_retencao, cap_atingimento)
-                                componente_fc_ret = atingimento_cap * peso_ret
-                                fc_total += componente_fc_ret
-                                detalhes_fc['retencao_clientes'] = {
-                                    'peso': peso_ret,
-                                    'realizado': taxa_retencao,
-                                    'meta': None,
-                                    'atingimento': taxa_retencao,
-                                    'atingimento_cap': atingimento_cap,
-                                    'componente_fc': componente_fc_ret
-                                }
-            except Exception:
-                pass
-
-            # --- Metas por fornecedor (retroativo) ---
-            try:
-                metas_fornecedores_df = historic_data.get('METAS_FORNECEDORES', pd.DataFrame())
-                faturados_hist = historic_data.get('FATURADOS', pd.DataFrame())
-                linha_do_item = item_faturado.get('Negócio')
-                if not metas_fornecedores_df.empty and linha_do_item is not None:
-                    metas_da_linha = metas_fornecedores_df[metas_fornecedores_df['linha'] == linha_do_item]
-                    fornecedores = metas_da_linha.to_dict('records') if not metas_da_linha.empty else []
-                    # usar mes_fat para janela YTD
-                    mes_apur = int(mes_fat) if mes_fat else None
-                    for idx, fornecedor in enumerate(fornecedores[:2], start=1):
-                        fornecedor_nome = fornecedor.get('fornecedor')
-                        meta_anual = fornecedor.get('meta_anual')
-                        if fornecedor_nome is None or meta_anual is None:
-                            continue
-                        try:
-                            meta_ytd = (float(meta_anual) / 12.0) * float(mes_apur) if mes_apur else float(meta_anual)
-                        except Exception:
-                            meta_ytd = 0.0
-
-                        # calcular faturamento realizado YTD para este fornecedor a partir dos históricos (sem conversão de moeda)
-                        faturamento_realizado_ytd = 0.0
-                        if not faturados_hist.empty and 'Fabricante' in faturados_hist.columns:
-                            dff = faturados_hist[faturados_hist['Fabricante'] == fornecedor_nome].copy()
-                            if not dff.empty:
-                                if 'Dt Emissão' in dff.columns and mes_apur:
-                                    dff['mes'] = pd.to_datetime(dff['Dt Emissão']).dt.month
-                                    faturamento_realizado_ytd = float(dff[dff['mes'] <= mes_apur]['Valor Realizado'].sum())
-                                else:
-                                    faturamento_realizado_ytd = float(dff['Valor Realizado'].sum())
-
-                        try:
-                            atingimento = (faturamento_realizado_ytd / meta_ytd) if meta_ytd and meta_ytd > 0 else 0.0
-                        except Exception:
-                            atingimento = 0.0
-
-                        cap_atingimento = float(self.params.get('cap_atingimento_max', 1.0))
-                        atingimento_cap = min(atingimento, cap_atingimento)
-
-                        peso_col_name = f'meta_fornecedor_{idx}'
-                        peso_fornecedor = 0.0
-                        pesos_df = self.data.get('PESOS_METAS', pd.DataFrame())
-                        if not pesos_df.empty and peso_col_name in pesos_df.columns:
-                            row_peso = pesos_df[pesos_df['cargo'] == cargo_colab]
-                            if not row_peso.empty:
-                                peso_fornecedor = float(row_peso.iloc[0].get(peso_col_name, 0)) / 100.0
-
-                        componente_fc_forn = atingimento_cap * peso_fornecedor
-                        fc_total += componente_fc_forn
-                        detalhes_fc[peso_col_name] = {
-                            'peso': peso_fornecedor,
-                            'realizado': faturamento_realizado_ytd,
-                            'meta': meta_ytd,
-                            'atingimento': atingimento,
-                            'atingimento_cap': atingimento_cap,
-                            'componente_fc': componente_fc_forn,
-                            'moeda': fornecedor.get('moeda', None)
-                        }
-            except Exception:
-                pass
-
-            return max(0.0, min(fc_total, cap_fc)), detalhes_fc
-        except Exception:
-            return 1.0, {}
 
     def _calcular_comissoes(self):
         """Itera sobre os itens faturados, calcula o FC para cada um e a comissão final."""
@@ -2726,7 +2013,6 @@ class CalculoComissao:
                             'observacao': 'CROSS_SELLING'
                         })
                 except Exception:
-                    pass
 
             if colaboradores_para_comissionar.empty:
                 self._log_validacao('AVISO', "Nenhum colaborador (gestão ou operacional) encontrado para o item.", dict(item_faturado))
@@ -2769,7 +2055,6 @@ class CalculoComissao:
                         if taxa_reduc > regra['taxa_rateio_maximo_pct'] / 100.0:
                             self._log_validacao('AVISO', f"taxa_cross_selling_pct ({taxa_reduc:.4f}) maior que taxa_rateio_maximo_pct ({regra['taxa_rateio_maximo_pct']/100.0:.4f}) para processo {processo_atual}", {'processo': processo_atual, 'consultor': cs_info.get('consultor'), 'taxa_cs': taxa_reduc, 'taxa_rateio': regra['taxa_rateio_maximo_pct']/100.0})
                     except Exception:
-                        pass
                     taxa_rateio = max(0.0, taxa_rateio - taxa_reduc)
 
                 # Se a decisão for B, mantemos taxa_rateio intacta mas consultor externo já foi removido
@@ -2821,7 +2106,6 @@ class CalculoComissao:
                                 rv = rv / 100.0
                             real_val = rv
                         except Exception:
-                            pass
                     base_dict[f'realizado_{short}'] = real_val
                     base_dict[f'meta_{short}'] = _g(detalhes_fc_item, comp, 'meta', None)
                     # Atingimento é uma razão (realizado/meta) e deve ser mantido como está (pode ser >1)
@@ -2866,7 +2150,6 @@ class CalculoComissao:
                     self._logger.info(f"Modo não-interativo detectado — usando opção default de cross-selling: {default}")
                 return default
         except Exception:
-            pass
 
         while True:
             try:
@@ -3147,7 +2430,6 @@ class CalculoComissao:
                     except Exception:
                         nomes_to_remove.add(str(nome).strip().lower())
             except Exception:
-                pass
 
             if not df_comissoes.empty and (ids_to_remove or nomes_to_remove):
                 before = len(df_comissoes)
@@ -3256,7 +2538,6 @@ class CalculoComissao:
                 df_resumo['comissao_total'] = pd.to_numeric(df_resumo['comissao_total'], errors='coerce').fillna(0.0)
         except Exception:
             # Se algo falhar, manter o resumo previamente calculado
-            pass
 
         # detalhes do FC foram incorporados em self.comissoes_df
         df_validacao = pd.DataFrame(self.validation_log)
@@ -3304,7 +2585,6 @@ class CalculoComissao:
                         if procs_multilinha:
                             base = base[~base['processo'].isin(procs_multilinha)]
                     except Exception:
-                        pass
 
                     # Derivar a linha do processo (única) para exibir
                     try:
@@ -3384,7 +2664,6 @@ class CalculoComissao:
                         if not df_out.empty and 'comissao_total' not in df_out.columns:
                             df_out['comissao_total'] = 0.0
                     except Exception:
-                        pass
 
                     # Ordenação
                     sort_cols = [c for c in ['processo','DATA_RECEBIMENTO'] if c in df_out.columns]
@@ -3418,22 +2697,18 @@ class CalculoComissao:
                     rec = self.data.get('RECEBIMENTOS', pd.DataFrame())
                     env.append({'categoria':'RECEBIMENTOS_cols','detalhe': ', '.join([str(c) for c in rec.columns]) if rec is not None and not rec.empty else ''})
                 except Exception:
-                    pass
                 try:
                     anal = self.data.get('ANALISE_COMERCIAL_COMPLETA', pd.DataFrame())
                     env.append({'categoria':'ANALISE_cols','detalhe': ', '.join([str(c) for c in anal.columns]) if anal is not None and not anal.empty else ''})
                 except Exception:
-                    pass
                 try:
                     rcv_set = sorted(list(getattr(self, 'recebe_por_recebimento', set())))
                     env.append({'categoria':'recebe_por_recebimento','detalhe': ', '.join(rcv_set)})
                 except Exception:
-                    pass
                 # merge com qualquer coleta anterior
                 try:
                     env.extend(getattr(self, 'debug_env', []))
                 except Exception:
-                    pass
                 dbg_env_df = pd.DataFrame(env)
                 if not dbg_env_df.empty:
                     dbg_env_df.to_excel(writer, sheet_name='DEBUG_ENV', index=False)
@@ -3448,7 +2723,6 @@ class CalculoComissao:
                     try:
                         info_rows.append({'colunas_analise': ', '.join([str(c) for c in anal.columns.tolist()])})
                     except Exception:
-                        pass
                     df_info = pd.DataFrame(info_rows)
                     df_info.to_excel(writer, sheet_name='DEBUG_ANALISE_INFO', index=False)
                     # Amostra de colunas relevantes, quando existirem
@@ -3519,10 +2793,38 @@ class CalculoComissao:
                     df_cs.to_excel(writer, sheet_name='CROSS_SELLING_DECISIONS', index=False)
             except Exception as e:
                 self._log_validacao('AVISO', f'Falha ao escrever CROSS_SELLING_DECISIONS: {e}', {})
-            # Aba: RECONCILIACAO (resultados das reconciliações entre adiantamentos e comissões finais)
+            # Aba: RECONCILIACAO (detalhamento e resumo de saldos)
             try:
-                if hasattr(self, 'reconciliacao_df') and not getattr(self, 'reconciliacao_df') is None and not self.reconciliacao_df.empty:
-                    self.reconciliacao_df.to_excel(writer, sheet_name='RECONCILIACAO', index=False)
+                detalhes = getattr(self, 'reconciliacao_detalhada_list', [])
+                resumo = getattr(self, 'reconciliacao_resumo_list', [])
+
+                if detalhes:
+                    df_reconciliacao_detalhada = pd.DataFrame(detalhes)
+                    if hasattr(self, 'comissoes_df') and isinstance(self.comissoes_df, pd.DataFrame) and not self.comissoes_df.empty:
+                        colunas_base = [c for c in self.comissoes_df.columns if c in df_reconciliacao_detalhada.columns]
+                        colunas_extra = [c for c in df_reconciliacao_detalhada.columns if c not in colunas_base]
+                        if colunas_base:
+                            df_reconciliacao_detalhada = df_reconciliacao_detalhada[colunas_base + colunas_extra]
+                else:
+                    print("Nenhuma reconciliação foi processada. Aba 'RECONCILIACAO' ficará vazia.")
+                    if hasattr(self, 'comissoes_df') and isinstance(self.comissoes_df, pd.DataFrame):
+                        df_reconciliacao_detalhada = pd.DataFrame(columns=self.comissoes_df.columns)
+                    else:
+                        df_reconciliacao_detalhada = pd.DataFrame()
+
+                df_reconciliacao_detalhada.to_excel(writer, sheet_name='RECONCILIACAO', index=False)
+                print(f"Aba 'RECONCILIACAO' (Detalhada) gerada com {len(df_reconciliacao_detalhada)} linhas.")
+
+                if resumo:
+                    df_reconciliacao_resumo = pd.DataFrame(resumo)
+                    start_row_resumo = len(df_reconciliacao_detalhada) + 3
+                    df_reconciliacao_resumo.to_excel(
+                        writer,
+                        sheet_name='RECONCILIACAO',
+                        index=False,
+                        startrow=start_row_resumo
+                    )
+                    print("Resumo de reconciliação adicionado ao final da aba.")
             except Exception as e:
                 self._log_validacao('AVISO', f'Falha ao escrever RECONCILIACAO: {e}', {})
 
@@ -3578,7 +2880,6 @@ class CalculoComissao:
         try:
             self._salvar_estado()
         except Exception:
-            pass
 
 if __name__ == '__main__':
     try:
@@ -3595,14 +2896,12 @@ if __name__ == '__main__':
                         if 2000 < ano < 2100:
                             break
                     except Exception:
-                        pass
                 while True:
                     try:
                         mes = int(input(f"Digite o número do mês para apuração em {ano} (1-12): "))
                         if 1 <= mes <= 12:
                             break
                     except Exception:
-                        pass
                 return mes, ano
 
         mes, ano = solicitar_mes_ano()
@@ -3686,4 +2985,7 @@ if __name__ == '__main__':
         calculadora.executar()
     except Exception as e:
         print(f"\nOcorreu um erro fatal durante a execução: {e}")
+
+
+
 
