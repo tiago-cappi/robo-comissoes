@@ -7,6 +7,29 @@ import unicodedata
 ARQUIVO_ANALISE_COMPLETA = 'Analise_Comercial_Completa.csv'
 ARQUIVO_SAIDA_FATURADOS = 'Faturados.xlsx'
 
+# Default column sets used to create empty files when inputs are missing
+DEFAULT_WANTED_FATURADOS = [
+    'Código Produto', 'Descrição Produto', 'Qtde Atendida', 'Operação',
+    'Processo', 'Status Processo', 'Dt Emissão', 'Valor Realizado',
+    'Consultor Interno', 'Representante-pedido', 'Gerente Comercial-Pedido',
+    'Aplicação Mat./Serv.', 'Cliente', 'Nome Cliente', 'Cidade', 'UF',
+    'Tipo de Mercadoria', 'Subgrupo', 'Grupo', 'Negócio'
+]
+
+DEFAULT_CONVERSOES_COLS = [
+    'Código Produto', 'Descrição Produto', 'Qtde Atendida', 'Operação',
+    'Processo', 'Status Processo', 'Data Aceite', 'Valor Orçado', 'Valor Realizado',
+    'Consultor Interno', 'Representante-pedido', 'Gerente Comercial-Pedido',
+    'Aplicação Mat./Serv.', 'Cliente', 'Nome Cliente', 'Cidade', 'UF',
+    'Tipo de Mercadoria', 'Subgrupo', 'Grupo', 'Negócio'
+]
+
+DEFAULT_YTD_WANTED = [
+    'Código Produto', 'Descrição Produto', 'Processo', 'Dt Emissão',
+    'Valor Realizado', 'Consultor Interno', 'Representante-pedido',
+    'Tipo de Mercadoria', 'Subgrupo', 'Grupo', 'Negócio', 'Fabricante'
+]
+
 def obter_mes_ano():
     """Solicita ao usuário o mês e o ano para apuração."""
     while True:
@@ -46,6 +69,22 @@ def _norm(s: str) -> str:
         return str(s).strip().lower()
 
 
+def _detect_sep(path, encodings=('utf-8-sig','utf-8','latin1')):
+    """Detect separator and encoding by reading first line of the file."""
+    for enc in encodings:
+        try:
+            with open(path, 'r', encoding=enc, errors='replace') as fh:
+                first = fh.readline()
+                counts = {',': first.count(','), ';': first.count(';'), '\t': first.count('\t')}
+                sep = max(counts, key=lambda k: (counts[k], 1 if k==';' else 0))
+                if counts[sep] == 0:
+                    sep = ','
+                return sep, enc
+        except Exception:
+            continue
+    return ',', encodings[0]
+
+
 def gerar_faturados(df, mes, ano):
     """Gera o arquivo Faturados.xlsx filtrando por mês/ano e operações relevantes."""
     arquivo_saida = 'Faturados.xlsx'
@@ -60,14 +99,14 @@ def gerar_faturados(df, mes, ano):
     if date_col is None:
         print("ERRO: não foi possível localizar coluna de data 'Dt Emissão' para faturados. Gerando arquivo vazio com cabeçalho.")
         # criar arquivo vazio com cabeçalho esperado
-        df_out = pd.DataFrame(columns=wanted)
-        try:
-            df_out.to_excel(arquivo_saida, index=False)
-            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_out)} linhas (vazio).")
-            return True
-        except Exception as e:
-            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
-            return False
+    df_out = pd.DataFrame(columns=DEFAULT_WANTED_FATURADOS)
+    try:
+        df_out.to_excel(arquivo_saida, index=False)
+        print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_out)} linhas (vazio).")
+        return True
+    except Exception as e:
+        print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+        return False
 
     raw = df[date_col].astype(str).str.strip().replace({'nan': ''})
     raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
@@ -83,14 +122,14 @@ def gerar_faturados(df, mes, ano):
     if df_filtrado.empty:
         print("Nenhum dado encontrado para o período selecionado. Gerando 'Faturados.xlsx' vazio com cabeçalho.")
         # criar arquivo vazio com cabeçalho esperado
-        df_out = pd.DataFrame(columns=wanted)
-        try:
-            df_out.to_excel(arquivo_saida, index=False)
-            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_out)} linhas (vazio).")
-            return True
-        except Exception as e:
-            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
-            return False
+    df_out = pd.DataFrame(columns=DEFAULT_WANTED_FATURADOS)
+    try:
+        df_out.to_excel(arquivo_saida, index=False)
+        print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_out)} linhas (vazio).")
+        return True
+    except Exception as e:
+        print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+        return False
 
     # aplicar filtro por operações (tolerante)
     operacoes_validas = {'FLOC','IMO2','OR19','P205','PSEM','PSER','SERV','PVEN','PVMA'}
@@ -177,14 +216,14 @@ def gerar_conversoes(df, mes, ano):
             'Aplicação Mat./Serv.', 'Cliente', 'Nome Cliente', 'Cidade', 'UF',
             'Tipo de Mercadoria', 'Subgrupo', 'Grupo', 'Negócio'
         ]
-        df_final = pd.DataFrame(columns=base_cols)
-        try:
-            df_final.to_excel(arquivo_saida, index=False)
-            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_final)} linhas (vazio).")
-            return True
-        except Exception as e:
-            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
-            return False
+    df_final = pd.DataFrame(columns=DEFAULT_CONVERSOES_COLS)
+    try:
+        df_final.to_excel(arquivo_saida, index=False)
+        print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_final)} linhas (vazio).")
+        return True
+    except Exception as e:
+        print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+        return False
 
     raw = df[data_aceite_col].astype(str).str.strip().replace({'nan': ''})
     raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
@@ -371,6 +410,203 @@ def run_preparador(mes: int, ano: int) -> bool:
     return True
 
 
+def prepare_dataframes_for_month(mes: int, ano: int):
+    """Returna uma tupla de DataFrames (faturados_df, conversoes_df, faturados_ytd_df, retencao_df)
+    para o mês/ano solicitado sem gravar arquivos em disco. Usa a mesma lógica interna
+    dos geradores, mas retorna DataFrames temporários.
+    """
+    if not os.path.exists(ARQUIVO_ANALISE_COMPLETA):
+        raise FileNotFoundError(ARQUIVO_ANALISE_COMPLETA)
+
+    # Ler arquivo como em run_preparador
+    sep_detected, used_enc_for_sep = _detect_sep(ARQUIVO_ANALISE_COMPLETA, ['utf-8-sig','utf-8','latin1'])
+    df_analise = None
+    for enc in ['utf-8-sig','utf-8','latin1']:
+        try:
+            df_analise = pd.read_csv(ARQUIVO_ANALISE_COMPLETA, sep=sep_detected, engine='python', on_bad_lines='warn', dtype=str, encoding=enc)
+            df_analise.columns = [c.strip() for c in df_analise.columns]
+            break
+        except Exception:
+            df_analise = None
+    if df_analise is None:
+        raise RuntimeError('Falha ao ler Analise_Comercial_Completa')
+
+    # Consolidar colunas duplicadas
+    def _consolidate_duplicates_local(df_local):
+        cols = list(df_local.columns)
+        norm_map = {}
+        for c in cols:
+            key = _norm(c)
+            norm_map.setdefault(key, []).append(c)
+        for key, group in norm_map.items():
+            if len(group) <= 1:
+                continue
+            first = group[0]
+            s = df_local[group].bfill(axis=1).iloc[:, 0]
+            df_local.drop(columns=group, inplace=True)
+            df_local[first] = s
+        return df_local
+
+    df_analise = _consolidate_duplicates_local(df_analise)
+
+    # build DataFrames using existing generators but without writing to disk
+    # For Faturados
+    try:
+        # reuse logic from gerar_faturados but return df
+        # locate date col
+        date_col = None
+        for c in df_analise.columns:
+            if _norm(c) == _norm('Dt Emissão') or ('dt' in _norm(c) and 'emiss' in _norm(c)):
+                date_col = c
+                break
+        faturados_df = pd.DataFrame()
+        if date_col is not None:
+            raw = df_analise[date_col].astype(str).str.strip().replace({'nan': ''})
+            raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
+            parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
+            parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
+            # prefer the parse with fewer NaNs, but if the chosen parse is all NaT, force dayfirst=True fallback
+            parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
+            if parsed.isna().all():
+                parsed = parsed1
+            df_analise[date_col] = parsed
+            filtro = (df_analise[date_col].dt.month == mes) & (df_analise[date_col].dt.year == ano)
+            faturados_df = df_analise[filtro].copy()
+        # attempt to normalize column names similar to gerar_faturados
+        wanted = [
+            'Código Produto', 'Descrição Produto', 'Qtde Atendida', 'Operação',
+            'Processo', 'Status Processo', 'Dt Emissão', 'Valor Realizado',
+            'Consultor Interno', 'Representante-pedido', 'Gerente Comercial-Pedido',
+            'Aplicação Mat./Serv.', 'Cliente', 'Nome Cliente', 'Cidade', 'UF',
+            'Tipo de Mercadoria', 'Subgrupo', 'Grupo', 'Negócio'
+        ]
+        for want in wanted:
+            if want not in faturados_df.columns:
+                found = None
+                for c in faturados_df.columns:
+                    if _norm(c) == _norm(want):
+                        found = c
+                        break
+                if found:
+                    faturados_df = faturados_df.rename(columns={found: want})
+                else:
+                    faturados_df[want] = pd.NA
+        faturados_df = faturados_df[wanted].copy() if not faturados_df.empty else pd.DataFrame(columns=wanted)
+    except Exception:
+        faturados_df = pd.DataFrame()
+
+    # Conversoes
+    try:
+        # find a 'Data Aceite' column
+        data_aceite_col = None
+        for c in df_analise.columns:
+            if _norm(c) == _norm('Data Aceite') or ('aceite' in _norm(c) and 'data' in _norm(c)):
+                data_aceite_col = c
+                break
+        conversoes_df = pd.DataFrame()
+        if data_aceite_col is not None:
+            raw = df_analise[data_aceite_col].astype(str).str.strip().replace({'nan': ''})
+            raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
+            parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
+            parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
+            parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
+            if parsed.isna().all():
+                parsed = parsed1
+            df_analise[data_aceite_col] = parsed
+            filtro = (df_analise[data_aceite_col].dt.month == mes) & (df_analise[data_aceite_col].dt.year == ano)
+            conversoes_df = df_analise[filtro].copy()
+        base_cols = [
+            'Código Produto', 'Descrição Produto', 'Qtde Atendida', 'Operação',
+            'Processo', 'Status Processo', 'Data Aceite', 'Valor Orçado', 'Valor Realizado',
+            'Consultor Interno', 'Representante-pedido', 'Gerente Comercial-Pedido',
+            'Aplicação Mat./Serv.', 'Cliente', 'Nome Cliente', 'Cidade', 'UF',
+            'Tipo de Mercadoria', 'Subgrupo', 'Grupo', 'Negócio'
+        ]
+        available = []
+        for want in base_cols:
+            if want in conversoes_df.columns:
+                available.append(want)
+                continue
+            found = None
+            for c in conversoes_df.columns:
+                if _norm(c) == _norm(want):
+                    found = c
+                    break
+            if found:
+                conversoes_df = conversoes_df.rename(columns={found: want})
+                available.append(want)
+        conversoes_df = conversoes_df[available].copy() if available else pd.DataFrame(columns=base_cols)
+    except Exception:
+        conversoes_df = pd.DataFrame()
+
+    # Faturados_YTD
+    try:
+        # reuse gerar_faturados_ytd logic to create df
+        date_col = None
+        for c in df_analise.columns:
+            if _norm(c) == _norm('Dt Emissão') or ('dt' in _norm(c) and 'emiss' in _norm(c)):
+                date_col = c
+                break
+        faturados_ytd_df = pd.DataFrame()
+        if date_col is not None:
+            raw = df_analise[date_col].astype(str).str.strip().replace({'nan': ''})
+            raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
+            parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
+            parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
+            parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
+            if parsed.isna().all():
+                parsed = parsed1
+            df_analise[date_col] = parsed
+            from datetime import datetime
+            import calendar
+            start = datetime(ano, 1, 1)
+            last_day = calendar.monthrange(ano, mes)[1]
+            end = datetime(ano, mes, last_day, 23, 59, 59)
+            mask_date = (df_analise[date_col].notna()) & (df_analise[date_col] >= start) & (df_analise[date_col] <= end)
+            df_ytd = df_analise[mask_date].copy()
+            # filter status
+            status_col = None
+            for c in df_ytd.columns:
+                if _norm(c) == _norm('Status Processo'):
+                    status_col = c
+                    break
+            if status_col is not None:
+                df_ytd = df_ytd[df_ytd[status_col].astype(str).str.strip().str.upper() == 'FATURADO']
+            wanted = [
+                'Código Produto', 'Descrição Produto', 'Processo', 'Dt Emissão',
+                'Valor Realizado', 'Consultor Interno', 'Representante-pedido',
+                'Tipo de Mercadoria', 'Subgrupo', 'Grupo', 'Negócio', 'Fabricante'
+            ]
+            for want in wanted:
+                if want not in df_ytd.columns:
+                    found = None
+                    for c in df_ytd.columns:
+                        if _norm(c) == _norm(want):
+                            found = c
+                            break
+                    if found:
+                        df_ytd = df_ytd.rename(columns={found: want})
+                    else:
+                        df_ytd[want] = pd.NA
+            faturados_ytd_df = df_ytd[wanted].copy()
+        else:
+            faturados_ytd_df = pd.DataFrame()
+    except Exception:
+        faturados_ytd_df = pd.DataFrame()
+
+    # Retencao_Clientes (light implementation: try to find columns linha/clientes_mes_anterior/clientes_mes_atual)
+    try:
+        retencao_df = pd.DataFrame()
+        # look for likely columns
+        candidates = [c for c in df_analise.columns if 'linha' in _norm(c) or 'cliente' in _norm(c)]
+        # fallback: produce an empty frame with expected columns
+        retencao_df = pd.DataFrame(columns=['linha', 'clientes_mes_anterior', 'clientes_mes_atual'])
+    except Exception:
+        retencao_df = pd.DataFrame(columns=['linha', 'clientes_mes_anterior', 'clientes_mes_atual'])
+
+    return faturados_df, conversoes_df, faturados_ytd_df, retencao_df
+
+
 def gerar_faturados_ytd(df, mes, ano):
     """Gera Faturados_YTD.xlsx usando os filtros SQL fornecidos pelo usuário e selecionando somente colunas necessárias."""
     arquivo_saida = 'Faturados_YTD.xlsx'
@@ -384,14 +620,14 @@ def gerar_faturados_ytd(df, mes, ano):
             break
     if date_col is None:
         print("ERRO: não foi possível encontrar coluna 'Dt Emissão' para gerar Faturados_YTD. Gerando arquivo vazio com cabeçalho.")
-        df_final = pd.DataFrame(columns=wanted)
-        try:
-            df_final.to_excel(arquivo_saida, index=False)
-            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_final)} linhas (vazio).")
-            return True
-        except Exception as e:
-            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
-            return False
+    df_final = pd.DataFrame(columns=DEFAULT_YTD_WANTED)
+    try:
+        df_final.to_excel(arquivo_saida, index=False)
+        print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_final)} linhas (vazio).")
+        return True
+    except Exception as e:
+        print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+        return False
 
     # Parse dates robustly
     raw = df[date_col].astype(str).str.strip().replace({'nan': ''})

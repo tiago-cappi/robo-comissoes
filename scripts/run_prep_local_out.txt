@@ -1,0 +1,55 @@
+﻿module loaded: True
+Analise shape: (13, 53)
+columns sample: ['C¾digo Produto', 'DescriþÒo Produto', 'DescriþÒo Informada', 'Qtde Solicitada', 'Qtde Atendida', 'Preþo Unitßrio', 'Grupo Estoque 1', 'Motivo NÒo Venda', 'SituaþÒo Pedido', 'Dt Encerramento', 'OperaþÒo', 'SÚrie', 'SubLote', 'Processo', 'Numero NF', 'Etapa', 'Status Processo', 'Dt Entrada', 'Status da NF', 'Data Aceite', 'Dt AprovaþÒo', 'Dt EmissÒo', 'Valor Orþado', 'Valor Realizado', 'Prob.Fech.', 'UN.Neg¾cio', 'Consultor Interno', 'Representante-pedido', 'Gerente Comercial-Pedido', 'Abordagem', 'AplicaþÒo Mat./Serv.', 'Meio Conhecimento', 'Cliente', 'Nome Cliente', 'Status Cliente', 'Atividade Cliente', 'ABC', 'Class.Comercial', 'Cidade', 'UF']
+date candidates: ['Dt Encerramento', 'Dt Entrada', 'Data Aceite', 'Dt AprovaþÒo', 'Dt EmissÒo', 'Data Entrega', 'Dt ProgramaþÒo']
+
+col: 'Dt Encerramento'
+ sample vals: ['nan', 'nan', 'nan', 'nan', 'nan', 'nan', 'nan', 'nan', 'nan', 'nan']
+parsed1 non-null: 0 parsed2 non-null: 0
+chosen non-null: 0
+chosen unique months: []
+
+col: 'Dt Entrada'
+ sample vals: ['25/10/2024', '25/10/2024', '25/10/2024', '25/10/2024', '25/10/2024', 'nan', '07/01/2025', '07/01/2025', '07/01/2025', 'nan']
+parsed1 non-null: 11 parsed2 non-null: 11
+chosen non-null: 11
+chosen unique months: [1, 10]
+
+col: 'Data Aceite'
+ sample vals: ['04/09/2025', '04/09/2025', '04/09/2025', '04/09/2025', '04/09/2025', 'nan', '11/08/2025', '11/08/2025', '11/08/2025', 'nan']
+parsed1 non-null: 11 parsed2 non-null: 8
+chosen non-null: 11
+chosen unique months: [2, 8, 9]
+
+col: 'Dt AprovaþÒo'
+ sample vals: ['nan', 'nan', 'nan', 'nan', 'nan', 'nan', '19/05/2025', '19/05/2025', '19/05/2025', 'nan']
+parsed1 non-null: 6 parsed2 non-null: 6
+chosen non-null: 6
+chosen unique months: [4, 5]
+
+col: 'Dt EmissÒo'
+ sample vals: ['13/08/2025', '13/08/2025', '13/08/2025', '13/08/2025', '13/08/2025', 'nan', '02/07/2025', '03/07/2025', '04/07/2025', 'nan']
+parsed1 non-null: 11 parsed2 non-null: 11
+chosen non-null: 11
+chosen unique months: [4, 7, 8]
+
+col: 'Data Entrega'
+ sample vals: ['13/03/2025', '13/03/2025', '13/03/2025', '13/03/2025', '13/03/2025', 'nan', '27/05/2025', '27/05/2025', '27/05/2025', 'nan']
+parsed1 non-null: 11 parsed2 non-null: 11
+chosen non-null: 11
+chosen unique months: [3, 4, 5]
+
+col: 'Dt ProgramaþÒo'
+ sample vals: ['nan', 'nan', 'nan', 'nan', 'nan', 'nan', 'nan', 'nan', 'nan', 'nan']
+parsed1 non-null: 0 parsed2 non-null: 0
+chosen non-null: 0
+chosen unique months: []
+
+prepare_dataframes_for_month returns shapes: (5, 20) (3, 21) (11, 12) (0, 3)
+f sample head:
+     C¾digo Produto                                                 DescriþÒo Produto Qtde Atendida               OperaþÒo Processo Status Processo Dt EmissÒo Valor Realizado Consultor Interno Representante-pedido Gerente Comercial-Pedido        AplicaþÒo Mat./Serv. Cliente                           Nome Cliente       Cidade UF Tipo de Mercadoria  Subgrupo         Grupo Neg¾cio
+          HONMMS-G2  SENSOR ELETROQUIMICO DE H2 PARA ANALISADOR DE G┴S MODELO MIDAS M             1 PVEN - PEDIDO DE VENDA   133701        FATURADO 2025-08-13             100    ANDREY.ANDRADE    LEONARDO DO CARMO        LEONARDO DO CARMO DEPART. DETECÃ├O FIXA GASES   22853 AMYRIS FERMENTACAO DE PERFORMANCE LTDA BARRA BONITA SP          ReposiþÒo    Sensor Detector Fixo     SSO
+          HONMMS-TR            SENSOR IR DE CO2 PARA ANALISADOR DE G┴S MODELO MIDAS M             1 PVEN - PEDIDO DE VENDA   133701        FATURADO 2025-08-13             100    ANDREY.ANDRADE    LEONARDO DO CARMO        LEONARDO DO CARMO DEPART. DETECÃ├O FIXA GASES   22853 AMYRIS FERMENTACAO DE PERFORMANCE LTDA BARRA BONITA SP          ReposiþÒo    Sensor Detector Fixo     SSO
+          HONMMS-D2 SENSOR DE OXIG╩NIO PARA USO NO ANALISADOR DE GASES MODELO MIDAS M             1 PVEN - PEDIDO DE VENDA   133701        FATURADO 2025-08-13             100    ANDREY.ANDRADE    LEONARDO DO CARMO        LEONARDO DO CARMO DEPART. DETECÃ├O FIXA GASES   22853 AMYRIS FERMENTACAO DE PERFORMANCE LTDA BARRA BONITA SP          ReposiþÒo    Sensor Detector Fixo     SSO
+ANGLTA2051WJ24V-IND                      SIRENE P/ SISTEMA DE DETECÃ├O FIXA SAV-C 24V             2 PVEN - PEDIDO DE VENDA   133701        FATURADO 2025-08-13             100    ANDREY.ANDRADE    LEONARDO DO CARMO        LEONARDO DO CARMO DEPART. DETECÃ├O FIXA GASES   22853 AMYRIS FERMENTACAO DE PERFORMANCE LTDA BARRA BONITA SP            Produto Acess¾rio Detector Fixo     SSO
+          HONMMT-01                     ANALISADOR FIXO PARA 4 GASES - MODELO MIDAS M             1 PVEN - PEDIDO DE VENDA   133701        FATURADO 2025-08-13             100    ANDREY.ANDRADE    LEONARDO DO CARMO        LEONARDO DO CARMO DEPART. DETECÃ├O FIXA GASES   22853 AMYRIS FERMENTACAO DE PERFORMANCE LTDA BARRA BONITA SP            Produto     Midas Detector Fixo     SSO
