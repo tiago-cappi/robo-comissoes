@@ -10,6 +10,13 @@ import unicodedata
 import re
 import sys
 
+def _normalize_text(s):
+    if pd.isna(s):
+        return ""
+    s = str(s)
+    s = unicodedata.normalize("NFKD", s).encode("ASCII", "ignore").decode("ASCII")
+    return " ".join(s.strip().upper().split())
+
 try:
     import requests
 except Exception:
@@ -98,6 +105,12 @@ class CalculoComissao:
                     return pd.DataFrame()
                     pass
                 return pd.DataFrame()
+            self.data['FATURADOS'] = _try_read_any([
+            ARQUIVO_FATURADOS,
+            'Faturados.xlsx',
+            'Faturados.xls',
+            'Faturados.csv'
+            ])
             self.data['CONVERSOES'] = _try_read_any([ARQUIVO_CONVERSOES, 'Conversões.xlsx', 'Conversoes.xlsx', 'Conversões.csv', 'Conversoes.csv'])
             self.data['RENTABILIDADE_REALIZADA'] = pd.read_excel(ARQUIVO_RENTABILIDADE)
             # Novo arquivo com dados de retenção de clientes por linha
@@ -1361,13 +1374,23 @@ class CalculoComissao:
             if not proc_str:
                 continue
 
-            status_pagamento = str(row.get('STATUS_PAGAMENTO', '') or '').strip().lower()
-            status_analise = str(row.get('STATUS_PROCESSO_ANALISE', '') or '').strip().lower()
-            status_reconc = str(row.get('STATUS_RECONCILIACAO', '') or '').strip().lower()
+            try:
+                status_pagamento = _normalize_text(row.get('STATUS_PAGAMENTO', ''))
+                status_analise = _normalize_text(row.get('STATUS_PROCESSO_ANALISE', ''))
+                status_reconc = _normalize_text(row.get('STATUS_RECONCILIACAO', ''))
 
-            if not (status_pagamento == 'quitado' and status_analise == 'faturado'):
-                continue
-            if status_reconc in ('realizada', 'concluida'):
+                is_quitado = 'QUITADO' in status_pagamento
+                is_faturado = (status_analise == 'FATURADO')
+
+                if status_reconc in ('REALIZADA', 'CONCLUIDA'):
+                    continue
+                if not (is_quitado and is_faturado):
+                    continue
+            except Exception as e:
+                try:
+                    self.estado.loc[idx, 'STATUS_RECONCILIACAO'] = f'Erro: {e}'
+                except Exception:
+                    pass
                 continue
 
             try:
