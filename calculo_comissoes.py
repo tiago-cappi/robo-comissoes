@@ -17,6 +17,7 @@ def _normalize_text(s):
     s = unicodedata.normalize("NFKD", s).encode("ASCII", "ignore").decode("ASCII")
     return " ".join(s.strip().upper().split())
 
+
 try:
     import requests
 except Exception:
@@ -1694,7 +1695,11 @@ class CalculoComissao:
 
             cargos_gestao_norm = set()
             if not df_colabs.empty:
-                cargos_gestao_norm = set(df_colabs[df_colabs['__norm_tipo_cargo'] == 'gestao']['__norm_cargo'].tolist())
+                try:
+                    tipo_gestao_norm = _normalize_text('Gestão')
+                except Exception:
+                    tipo_gestao_norm = 'GESTAO'
+                cargos_gestao_norm = set(df_colabs[df_colabs['__norm_tipo_cargo'] == tipo_gestao_norm]['__norm_cargo'].tolist())
             if cargos_gestao_norm:
                 df_atribuicoes_gestao = df_atribuicoes[df_atribuicoes['__norm_cargo'].isin(cargos_gestao_norm)].copy()
             else:
@@ -1778,25 +1783,16 @@ class CalculoComissao:
                 combined = combined[combined['__norm_colaborador'].isin(recebe_set_norm)]
                 # Se, após filtrar pelos que recebem por recebimento, não houver candidatos,
                 # tentar trazer candidatos diretamente de df_colabs (fallback mínimo).
+                # Para reconciliações, NUNCA usar fallback amplo de COLABORADORES.
+                # Se não houver atribuídos (gestão/operacional) que também recebam por recebimento,
+                # então não há cálculo de reconciliação para este item.
                 if combined.empty:
-                    try:
-                        if recebe_set_norm and not df_colabs.empty and '__norm_nome_colaborador' in df_colabs.columns:
-                            candidatos = df_colabs[df_colabs['__norm_nome_colaborador'].isin(recebe_set_norm)][['nome_colaborador', 'cargo']].copy()
-                            if not candidatos.empty:
-                                candidatos = candidatos.rename(columns={'nome_colaborador': 'colaborador'})
-                                candidatos['colaborador'] = candidatos['colaborador'].astype(str).str.strip()
-                                candidatos['cargo'] = candidatos['cargo'].astype(str).str.strip()
-                                candidatos['__norm_colaborador'] = candidatos['colaborador'].apply(_normalize_text)
-                                candidatos = candidatos.drop_duplicates(subset=['__norm_colaborador', 'cargo']).reset_index(drop=True)
-                                combined = candidatos
-                                if getattr(self, '_logger', None):
-                                    self._logger.info(f"[Reconc-Debug] Fallback imediato: usando colaboradores de COLABORADORES para reconciliacao: {combined.to_dict(orient='records')}")
-                                else:
-                                    print("[Reconc-Debug] Fallback imediato: usando colaboradores de COLABORADORES para reconciliacao:", combined.to_dict(orient='records'))
-                    except Exception:
-                        pass
-                    if combined.empty:
-                        continue
+                    if getattr(self, '_logger', None):
+                        try:
+                            self._logger.info(f"[Reconc-Debug] Sem candidatos elegíveis por recebimento para item (proc={proc_str}). Pulando.")
+                        except Exception:
+                            pass
+                    continue
 
                 processed = set()
                 for _, colab_row in combined.iterrows():
@@ -2988,13 +2984,55 @@ class CalculoComissao:
 
 if __name__ == '__main__':
     try:
-        # Perguntar ao usuário o mês/ano desejado e atualizar caminhos para arquivos de rentabilidade
+        # Suporte a modo não-interativo via CLI e variáveis de ambiente
+        def _parse_cli_env_mes_ano():
+            mes_cli = None
+            ano_cli = None
+            skip_clean = False
+            try:
+                import argparse
+                parser = argparse.ArgumentParser(add_help=False)
+                parser.add_argument('--mes', type=int)
+                parser.add_argument('--ano', type=int)
+                parser.add_argument('--skip-clean', action='store_true', default=False)
+                args, _ = parser.parse_known_args()
+                mes_cli = args.mes
+                ano_cli = args.ano
+                skip_clean = bool(args.skip_clean)
+            except Exception:
+                pass
+
+            # Variáveis de ambiente alternativas aceitas
+            env_mes = os.environ.get('MES_APURACAO') or os.environ.get('COMISSOES_MES') or os.environ.get('MES')
+            env_ano = os.environ.get('ANO_APURACAO') or os.environ.get('COMISSOES_ANO') or os.environ.get('ANO')
+            if mes_cli is None and env_mes:
+                try:
+                    mes_cli = int(str(env_mes).strip())
+                except Exception:
+                    mes_cli = None
+            if ano_cli is None and env_ano:
+                try:
+                    ano_cli = int(str(env_ano).strip())
+                except Exception:
+                    ano_cli = None
+
+            # Flag para pular limpeza por ENV
+            if not skip_clean:
+                skip_clean = os.environ.get('SKIP_CLEAN') in ('1', 'true', 'TRUE', 'yes', 'YES')
+
+            return mes_cli, ano_cli, skip_clean
+
+        # Perguntar somente se não vier por CLI/ENV
         def solicitar_mes_ano():
+            mes_cli, ano_cli, skip_clean = _parse_cli_env_mes_ano()
+            if isinstance(mes_cli, int) and 1 <= mes_cli <= 12 and isinstance(ano_cli, int) and 2000 < ano_cli < 2100:
+                return mes_cli, ano_cli, skip_clean
             try:
                 from preparar_dados_mensais import obter_mes_ano
-                return obter_mes_ano()
+                m, a = obter_mes_ano()
+                return m, a, False
             except Exception:
-                # fallback simples
+                # fallback simples (interativo)
                 while True:
                     try:
                         ano = int(input("Digite o ano para apuração (ex: 2025): "))
@@ -3011,32 +3049,35 @@ if __name__ == '__main__':
                     except Exception:
                         pass
 
-                return mes, ano
+                return mes, ano, False
 
-        mes, ano = solicitar_mes_ano()
+        mes, ano, skip_clean = solicitar_mes_ano()
         # Sempre executar os scripts de limpeza que geram Recebimentos_do_Mes.xlsx
         # e Status_Pagamentos_Processos.xlsx, e em seguida o preparador de dados
         # para garantir que os arquivos necessários sejam gerados para o mês/ano selecionado.
         try:
             import subprocess, os
-            print(f"Executando script de limpeza de recebimentos para {mes}/{ano}...")
-            r1 = subprocess.run([sys.executable, 'limpeza_recebimentos.py', str(mes), str(ano)], text=True, check=False)
-            if r1.returncode != 0:
-                print(f"ERRO: o script 'limpeza_recebimentos.py' retornou código {r1.returncode}. Abortando.")
-                sys.exit(1)
-            if not os.path.exists('Recebimentos_do_Mes.xlsx'):
-                print("ERRO: arquivo 'Recebimentos_do_Mes.xlsx' não foi gerado pelo script de limpeza. Abortando.")
-                sys.exit(1)
+            if skip_clean:
+                print(f"PULANDO scripts de limpeza por flag --skip-clean/ENV para {mes}/{ano}.")
+            else:
+                print(f"Executando script de limpeza de recebimentos para {mes}/{ano}...")
+                r1 = subprocess.run([sys.executable, 'limpeza_recebimentos.py', str(mes), str(ano)], text=True, check=False)
+                if r1.returncode != 0:
+                    print(f"ERRO: o script 'limpeza_recebimentos.py' retornou código {r1.returncode}. Abortando.")
+                    sys.exit(1)
+                if not os.path.exists('Recebimentos_do_Mes.xlsx'):
+                    print("ERRO: arquivo 'Recebimentos_do_Mes.xlsx' não foi gerado pelo script de limpeza. Abortando.")
+                    sys.exit(1)
 
-            print(f"Executando script de limpeza de status de pagamentos para {mes}/{ano}...")
-            r2 = subprocess.run([sys.executable, 'limpeza_status_pagamentos.py', str(mes), str(ano)], text=True, check=False)
-            if r2.returncode != 0:
-                print(f"ERRO: o script 'limpeza_status_pagamentos.py' retornou código {r2.returncode}. Abortando.")
-                sys.exit(1)
-            if not os.path.exists('Status_Pagamentos_Processos.xlsx'):
-                print("ERRO: arquivo 'Status_Pagamentos_Processos.xlsx' não foi gerado pelo script de limpeza. Abortando.")
-                sys.exit(1)
-            print("Scripts de limpeza executados com sucesso.")
+                print(f"Executando script de limpeza de status de pagamentos para {mes}/{ano}...")
+                r2 = subprocess.run([sys.executable, 'limpeza_status_pagamentos.py', str(mes), str(ano)], text=True, check=False)
+                if r2.returncode != 0:
+                    print(f"ERRO: o script 'limpeza_status_pagamentos.py' retornou código {r2.returncode}. Abortando.")
+                    sys.exit(1)
+                if not os.path.exists('Status_Pagamentos_Processos.xlsx'):
+                    print("ERRO: arquivo 'Status_Pagamentos_Processos.xlsx' não foi gerado pelo script de limpeza. Abortando.")
+                    sys.exit(1)
+                print("Scripts de limpeza executados com sucesso.")
         except Exception as e:
             print(f"AVISO: falha ao executar os scripts de limpeza automaticamente: {e}. Abortando.")
             sys.exit(1)
