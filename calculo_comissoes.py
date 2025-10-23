@@ -1647,9 +1647,19 @@ class CalculoComissao:
 
         df_rc = self.data.get('RETENCAO_CLIENTES', None)
         df_ytd = self.data.get('FATURADOS_YTD', None)
-        realizado_original = getattr(self, 'realizado', None)
+        _prev_realizado = getattr(self, 'realizado', None)
+        # Aplicar os realizados históricos temporariamente para que o cálculo do FC
+        # utilize os valores do mês do faturamento do processo.
+        self.realizado = realizados_hist
+        # Log mínimo para depurar por que nenhuma linha é gerada durante reconciliação
         try:
-            self.realizado = realizados_hist
+            if getattr(self, '_logger', None):
+                self._logger.info(f"[Reconc-Debug] realizados_hist sizes: " + ", ".join(f"{k}={getattr(v, 'shape', 'series') or len(v)}" for k,v in realizados_hist.items()))
+            else:
+                print("[Reconc-Debug] realizados_hist keys:", list(realizados_hist.keys()))
+        except Exception:
+            pass
+        try:
             self.data['RETENCAO_CLIENTES'] = df_ret_hist.copy() if not df_ret_hist.empty else pd.DataFrame()
             if not df_fat_ytd_hist.empty:
                 dt_ytd_col = _match_column(df_fat_ytd_hist, ['dt emissão', 'dt emissao', 'data emissão', 'data emissao'])
@@ -1698,6 +1708,19 @@ class CalculoComissao:
                         colab_info_map[norm_name] = row_info
 
             recebe_set_norm = {_normalize_text(nome) for nome in getattr(self, 'recebe_por_recebimento', set())}
+            try:
+                if getattr(self, '_logger', None):
+                    self._logger.info(f"[Reconc-Debug] recebe_por_recebimento (norm): {sorted(list(recebe_set_norm))}")
+                    self._logger.info(f"[Reconc-Debug] df_atribuicoes_gestao shape: {getattr(df_atribuicoes_gestao, 'shape', None)} df_colabs shape: {getattr(df_colabs, 'shape', None)}")
+                    # checar presença de um nome esperado
+                    for nome_t in list(getattr(self, 'recebe_por_recebimento', set()))[:5]:
+                        norm = _normalize_text(nome_t)
+                        present = not df_colabs[df_colabs.get('__norm_nome_colaborador','') == norm].empty if '__norm_nome_colaborador' in df_colabs.columns else False
+                        self._logger.info(f"[Reconc-Debug] colaborador '{nome_t}' present in COLABORADORES? {present}")
+                else:
+                    print("[Reconc-Debug] recebe_por_recebimento (norm):", sorted(list(recebe_set_norm)))
+            except Exception:
+                pass
             linhas_reconciliacao_detalhada = []
 
             for _, item in df_itens_processo.iterrows():
@@ -1739,6 +1762,13 @@ class CalculoComissao:
                     operacional_df['gestor'] = False
 
                 combined = pd.concat([gestao_df, operacional_df], ignore_index=True, sort=False)
+                try:
+                    if getattr(self, '_logger', None):
+                        self._logger.info(f"[Reconc-Debug] combined candidates for item (proc={proc_str}): {combined.to_dict(orient='records')}")
+                    else:
+                        print(f"[Reconc-Debug] combined candidates for item (proc={proc_str}):", combined.to_dict(orient='records'))
+                except Exception:
+                    pass
                 if combined.empty:
                     continue
                 combined['colaborador'] = combined['colaborador'].astype(str).str.strip()
@@ -1746,8 +1776,27 @@ class CalculoComissao:
                 combined['__norm_colaborador'] = combined['colaborador'].apply(_normalize_text)
                 combined = combined.drop_duplicates(subset=['__norm_colaborador', 'cargo']).reset_index(drop=True)
                 combined = combined[combined['__norm_colaborador'].isin(recebe_set_norm)]
+                # Se, após filtrar pelos que recebem por recebimento, não houver candidatos,
+                # tentar trazer candidatos diretamente de df_colabs (fallback mínimo).
                 if combined.empty:
-                    continue
+                    try:
+                        if recebe_set_norm and not df_colabs.empty and '__norm_nome_colaborador' in df_colabs.columns:
+                            candidatos = df_colabs[df_colabs['__norm_nome_colaborador'].isin(recebe_set_norm)][['nome_colaborador', 'cargo']].copy()
+                            if not candidatos.empty:
+                                candidatos = candidatos.rename(columns={'nome_colaborador': 'colaborador'})
+                                candidatos['colaborador'] = candidatos['colaborador'].astype(str).str.strip()
+                                candidatos['cargo'] = candidatos['cargo'].astype(str).str.strip()
+                                candidatos['__norm_colaborador'] = candidatos['colaborador'].apply(_normalize_text)
+                                candidatos = candidatos.drop_duplicates(subset=['__norm_colaborador', 'cargo']).reset_index(drop=True)
+                                combined = candidatos
+                                if getattr(self, '_logger', None):
+                                    self._logger.info(f"[Reconc-Debug] Fallback imediato: usando colaboradores de COLABORADORES para reconciliacao: {combined.to_dict(orient='records')}")
+                                else:
+                                    print("[Reconc-Debug] Fallback imediato: usando colaboradores de COLABORADORES para reconciliacao:", combined.to_dict(orient='records'))
+                    except Exception:
+                        pass
+                    if combined.empty:
+                        continue
 
                 processed = set()
                 for _, colab_row in combined.iterrows():
@@ -1808,7 +1857,8 @@ class CalculoComissao:
                     linha_detalhada.update(_flatten_fc_details(detalhes_fc_item))
                     linhas_reconciliacao_detalhada.append(linha_detalhada)
         finally:
-            self.realizado = realizado_original
+            # Restaurar o atributo realizado e outros dados originais
+            self.realizado = _prev_realizado
             self.data['RETENCAO_CLIENTES'] = df_rc
             self.data['FATURADOS_YTD'] = df_ytd
 
@@ -1994,6 +2044,26 @@ class CalculoComissao:
             combined['__colab_norm'] = combined['colaborador'].astype(str).str.lower().str.strip()
             combined = combined.drop_duplicates(subset=['__colab_norm', 'cargo']).drop(columns=['__colab_norm']).reset_index(drop=True)
             colaboradores_para_comissionar = combined
+
+            # Fallback mínimo: se, após aplicar o filtro por quem recebe por recebimento,
+            # não houver candidatos, tentar incluir colaboradores listados em
+            # `recebe_por_recebimento` que existam em `df_colabs`.
+            try:
+                if colaboradores_para_comissionar.empty and recebe_set_norm and not df_colabs.empty:
+                    candidatos = df_colabs[df_colabs['__norm_nome_colaborador'].isin(recebe_set_norm)][['nome_colaborador', 'cargo']].copy()
+                    if not candidatos.empty:
+                        candidatos = candidatos.rename(columns={'nome_colaborador': 'colaborador'})
+                        candidatos['colaborador'] = candidatos['colaborador'].astype(str).str.strip()
+                        candidatos['cargo'] = candidatos['cargo'].astype(str).str.strip()
+                        candidatos['__norm_colaborador'] = candidatos['colaborador'].apply(_normalize_text)
+                        candidatos = candidatos.drop_duplicates(subset=['__norm_colaborador', 'cargo']).drop(columns=['__norm_colaborador']).reset_index(drop=True)
+                        colaboradores_para_comissionar = candidatos
+                        if getattr(self, '_logger', None):
+                            self._logger.info(f"[Reconc-Debug] Fallback: usando colaboradores de COLABORADORES para reconciliacao: {colaboradores_para_comissionar.to_dict(orient='records')}")
+                        else:
+                            print("[Reconc-Debug] Fallback: usando colaboradores de COLABORADORES para reconciliacao:", colaboradores_para_comissionar.to_dict(orient='records'))
+            except Exception:
+                pass
 
 
             # Verificar se este processo foi detectado como cross-selling
