@@ -1392,8 +1392,6 @@ class CalculoComissao:
                 })
                 try:
                     self.estado.loc[idx, 'STATUS_RECONCILIACAO'] = 'Realizada'
-                try:
-                    self.estado.loc[idx, 'STATUS_RECONCILIACAO'] = 'Realizada'
                 except Exception:
                     pass
                 print(f"  [SUCESSO] Reconciliação para {proc_str} concluída. Saldo: {saldo_final:.2f}")
@@ -1403,7 +1401,6 @@ class CalculoComissao:
                     self.estado.loc[idx, 'STATUS_RECONCILIACAO'] = f'Erro: {e}'
                 except Exception:
                     pass
-                except Exception:
 
 
     def _gerar_reconciliacao_detalhada_processo(self, proc_id):
@@ -1478,6 +1475,7 @@ class CalculoComissao:
                         else:
                             real_val = rv
                     except Exception:
+                        pass
                 flattened[f'peso_{short}'] = detalhes.get('peso')
                 flattened[f'realizado_{short}'] = real_val
                 flattened[f'meta_{short}'] = detalhes.get('meta')
@@ -2013,7 +2011,7 @@ class CalculoComissao:
                             'observacao': 'CROSS_SELLING'
                         })
                 except Exception:
-
+                    pass
             if colaboradores_para_comissionar.empty:
                 self._log_validacao('AVISO', "Nenhum colaborador (gestão ou operacional) encontrado para o item.", dict(item_faturado))
                 continue
@@ -2055,6 +2053,7 @@ class CalculoComissao:
                         if taxa_reduc > regra['taxa_rateio_maximo_pct'] / 100.0:
                             self._log_validacao('AVISO', f"taxa_cross_selling_pct ({taxa_reduc:.4f}) maior que taxa_rateio_maximo_pct ({regra['taxa_rateio_maximo_pct']/100.0:.4f}) para processo {processo_atual}", {'processo': processo_atual, 'consultor': cs_info.get('consultor'), 'taxa_cs': taxa_reduc, 'taxa_rateio': regra['taxa_rateio_maximo_pct']/100.0})
                     except Exception:
+                        pass
                     taxa_rateio = max(0.0, taxa_rateio - taxa_reduc)
 
                 # Se a decisão for B, mantemos taxa_rateio intacta mas consultor externo já foi removido
@@ -2106,6 +2105,7 @@ class CalculoComissao:
                                 rv = rv / 100.0
                             real_val = rv
                         except Exception:
+                            pass
                     base_dict[f'realizado_{short}'] = real_val
                     base_dict[f'meta_{short}'] = _g(detalhes_fc_item, comp, 'meta', None)
                     # Atingimento é uma razão (realizado/meta) e deve ser mantido como está (pode ser >1)
@@ -2150,7 +2150,7 @@ class CalculoComissao:
                     self._logger.info(f"Modo não-interativo detectado — usando opção default de cross-selling: {default}")
                 return default
         except Exception:
-
+            pass
         while True:
             try:
                 escolha = input(prompt).strip().upper()
@@ -2430,6 +2430,7 @@ class CalculoComissao:
                     except Exception:
                         nomes_to_remove.add(str(nome).strip().lower())
             except Exception:
+                pass
 
             if not df_comissoes.empty and (ids_to_remove or nomes_to_remove):
                 before = len(df_comissoes)
@@ -2538,6 +2539,7 @@ class CalculoComissao:
                 df_resumo['comissao_total'] = pd.to_numeric(df_resumo['comissao_total'], errors='coerce').fillna(0.0)
         except Exception:
             # Se algo falhar, manter o resumo previamente calculado
+            pass
 
         # detalhes do FC foram incorporados em self.comissoes_df
         df_validacao = pd.DataFrame(self.validation_log)
@@ -2585,6 +2587,7 @@ class CalculoComissao:
                         if procs_multilinha:
                             base = base[~base['processo'].isin(procs_multilinha)]
                     except Exception:
+                        pass
 
                     # Derivar a linha do processo (única) para exibir
                     try:
@@ -2664,6 +2667,8 @@ class CalculoComissao:
                         if not df_out.empty and 'comissao_total' not in df_out.columns:
                             df_out['comissao_total'] = 0.0
                     except Exception:
+                        pass
+
 
                     # Ordenação
                     sort_cols = [c for c in ['processo','DATA_RECEBIMENTO'] if c in df_out.columns]
@@ -2697,18 +2702,22 @@ class CalculoComissao:
                     rec = self.data.get('RECEBIMENTOS', pd.DataFrame())
                     env.append({'categoria':'RECEBIMENTOS_cols','detalhe': ', '.join([str(c) for c in rec.columns]) if rec is not None and not rec.empty else ''})
                 except Exception:
+                    pass
                 try:
                     anal = self.data.get('ANALISE_COMERCIAL_COMPLETA', pd.DataFrame())
                     env.append({'categoria':'ANALISE_cols','detalhe': ', '.join([str(c) for c in anal.columns]) if anal is not None and not anal.empty else ''})
                 except Exception:
+                    pass
                 try:
                     rcv_set = sorted(list(getattr(self, 'recebe_por_recebimento', set())))
                     env.append({'categoria':'recebe_por_recebimento','detalhe': ', '.join(rcv_set)})
                 except Exception:
+                    pass
                 # merge com qualquer coleta anterior
                 try:
                     env.extend(getattr(self, 'debug_env', []))
                 except Exception:
+                    pass
                 dbg_env_df = pd.DataFrame(env)
                 if not dbg_env_df.empty:
                     dbg_env_df.to_excel(writer, sheet_name='DEBUG_ENV', index=False)
@@ -2723,6 +2732,7 @@ class CalculoComissao:
                     try:
                         info_rows.append({'colunas_analise': ', '.join([str(c) for c in anal.columns.tolist()])})
                     except Exception:
+                        pass
                     df_info = pd.DataFrame(info_rows)
                     df_info.to_excel(writer, sheet_name='DEBUG_ANALISE_INFO', index=False)
                     # Amostra de colunas relevantes, quando existirem
@@ -2880,6 +2890,8 @@ class CalculoComissao:
         try:
             self._salvar_estado()
         except Exception:
+            pass
+
 
 if __name__ == '__main__':
     try:
@@ -2896,12 +2908,16 @@ if __name__ == '__main__':
                         if 2000 < ano < 2100:
                             break
                     except Exception:
+                        pass
+
                 while True:
                     try:
                         mes = int(input(f"Digite o número do mês para apuração em {ano} (1-12): "))
                         if 1 <= mes <= 12:
                             break
                     except Exception:
+                        pass
+
                 return mes, ano
 
         mes, ano = solicitar_mes_ano()
