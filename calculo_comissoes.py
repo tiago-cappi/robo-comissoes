@@ -290,11 +290,7 @@ except ImportError:
 # --- CONFIGURAÇÕES E CONSTANTES ---
 # Nomes dos arquivos de entrada (ajuste se necessário)
 ARQUIVO_REGRAS_XLSX = "Regras_Comissoes.xlsx"
-ARQUIVO_FATURADOS = "Faturados Setembro 2025.xlsx"
-ARQUIVO_CONVERSOES = "Conversões Setembro 2025.xlsx"
-ARQUIVO_RENTABILIDADE = "Rentabilidade_Realizada_Setembro_2025.xlsx"
 ARQUIVO_RETENCAO = "Retencao_Clientes.xlsx"
-ARQUIVO_FATURADOS_YTD = "Faturados_YTD_Setembro_2025.xlsx"
 ARQUIVO_RECEBIMENTOS = "Recebimentos_do_Mes.xlsx"
 ARQUIVO_STATUS_PAGAMENTOS = "Status_Pagamentos_Processos.xlsx"
 ARQUIVO_ESTADO = "Estado_Processos_Recebimento.xlsx"
