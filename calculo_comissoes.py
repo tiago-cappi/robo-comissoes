@@ -3,12 +3,266 @@ import numpy as np
 import os
 import preparar_dados_mensais
 from datetime import datetime
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 import calendar
 import time
 import logging
 import unicodedata
 import re
 import sys
+
+import os, sys
+
+# Flag simples de verbosidade (NÃO muda cálculo)
+LOG_VERBOSE = os.getenv("COMISSOES_VERBOSE", "0") == "1"
+
+def _phase(title: str):
+    """Imprime separador visual para início de fase/etapa."""
+    sep = "#" * 72
+    print(f"\n{sep}\n# {title}\n{sep}\n")
+
+def _progress_step5(current: int, total: int, width: int = 30):
+    """
+    Barra de progresso para Etapa 5 (calculando FC item a item).
+    Usa apenas '#######' e percentual, sem mudar a lógica de cálculo.
+    """
+    if total <= 0:
+        total = 1  # evita divisão por zero
+    pct = int((current / total) * 100)
+    filled = int((pct * width) // 100)
+    bar = "#" * filled + "-" * (width - filled)
+    sys.stdout.write(f"\r[Etapa 5] calculando FC item a item: [{bar}] {pct}% ({current}/{total})")
+    sys.stdout.flush()
+    if current >= total:
+        sys.stdout.write("\n")
+
+def _info(msg: str):
+    """Log leve (sempre mostrado)."""
+    print(msg)
+
+def _debug(msg: str):
+    """Log verboso (apenas se COMISSOES_VERBOSE=1)."""
+    if LOG_VERBOSE:
+        print(msg)
+
+
+# ======== ESTILIZAÇÃO DO EXCEL (pós-processamento, sem mudar dados) ========
+def _light_fill(rgb_hex: str) -> PatternFill:
+    # rgb_hex sem '#', ex: 'E3F2FD'
+    return PatternFill(start_color=rgb_hex, end_color=rgb_hex, fill_type="solid")
+
+
+# Paleta suave (pastéis, claras)
+_PALETTE = [
+    "E3F2FD",  # azul claríssimo
+    "E8F5E9",  # verde claríssimo
+    "FFF8E1",  # amarelo claríssimo
+    "F3E5F5",  # lilás claríssimo
+    "E0F7FA",  # ciano claríssimo
+    "FBE9E7",  # pêssego claríssimo
+    "F1F8E9",  # lima claríssimo
+    "FFF3E0",  # laranja claríssimo
+    "EDE7F6",  # roxo claríssimo
+    "F9FBE7",  # chartreuse claríssimo
+]
+
+
+# Grupo → padrões de identificação de coluna (qualquer substring no cabeçalho)
+_FC_GROUP_PATTERNS = {
+    # faturamento (linha / individual)
+    "faturamento_linha": [
+        "FATURAMENTO_LINHA",
+        "FC_FATURAMENTO_LINHA",
+        "PESO_FATURAMENTO_LINHA",
+        "META_FATURAMENTO_LINHA",
+        "REALIZADO_FATURAMENTO_LINHA",
+        "ATINGIMENTO_FATURAMENTO_LINHA",
+        "PESO_FAT_LINHA",
+        "META_FAT_LINHA",
+        "REALIZADO_FAT_LINHA",
+        "ATING_FAT_LINHA",
+        "ATING_CAP_FAT_LINHA",
+        "COMP_FC_FAT_LINHA",
+    ],
+    "faturamento_individual": [
+        "FATURAMENTO_INDIVIDUAL",
+        "FC_FATURAMENTO_INDIVIDUAL",
+        "PESO_FATURAMENTO_INDIVIDUAL",
+        "META_FATURAMENTO_INDIVIDUAL",
+        "REALIZADO_FATURAMENTO_INDIVIDUAL",
+        "ATINGIMENTO_FATURAMENTO_INDIVIDUAL",
+        "PESO_FAT_IND",
+        "META_FAT_IND",
+        "REALIZADO_FAT_IND",
+        "ATING_FAT_IND",
+        "ATING_CAP_FAT_IND",
+        "COMP_FC_FAT_IND",
+    ],
+
+    # conversão (linha / individual)
+    "conversao_linha": [
+        "CONVERSAO_LINHA",
+        "FC_CONVERSAO_LINHA",
+        "PESO_CONVERSAO_LINHA",
+        "META_CONVERSAO_LINHA",
+        "REALIZADO_CONVERSAO_LINHA",
+        "ATINGIMENTO_CONVERSAO_LINHA",
+        "PESO_CONV_LINHA",
+        "META_CONV_LINHA",
+        "REALIZADO_CONV_LINHA",
+        "ATING_CONV_LINHA",
+        "ATING_CAP_CONV_LINHA",
+        "COMP_FC_CONV_LINHA",
+    ],
+    "conversao_individual": [
+        "CONVERSAO_INDIVIDUAL",
+        "FC_CONVERSAO_INDIVIDUAL",
+        "PESO_CONVERSAO_INDIVIDUAL",
+        "META_CONVERSAO_INDIVIDUAL",
+        "REALIZADO_CONVERSAO_INDIVIDUAL",
+        "ATINGIMENTO_CONVERSAO_INDIVIDUAL",
+        "PESO_CONV_IND",
+        "META_CONV_IND",
+        "REALIZADO_CONV_IND",
+        "ATING_CONV_IND",
+        "ATING_CAP_CONV_IND",
+        "COMP_FC_CONV_IND",
+    ],
+
+    # rentabilidade / retenção
+    "rentabilidade": [
+        "RENTABILIDADE",
+        "FC_RENTABILIDADE",
+        "PESO_RENTABILIDADE",
+        "META_RENTABILIDADE",
+        "REALIZADO_RENTABILIDADE",
+        "ATINGIMENTO_RENTABILIDADE",
+        "PESO_RENTAB",
+        "META_RENTAB",
+        "REALIZADO_RENTAB",
+        "ATING_RENTAB",
+        "ATING_CAP_RENTAB",
+        "COMP_FC_RENTAB",
+    ],
+    "retencao": [
+        "RETENCAO",
+        "FC_RETENCAO",
+        "PESO_RETENCAO",
+        "META_RETENCAO",
+        "REALIZADO_RETENCAO",
+        "ATINGIMENTO_RETENCAO",
+        "PESO_RETENCAO",
+        "META_RETENCAO",
+        "REALIZADO_RETENCAO",
+        "ATING_RETENCAO",
+        "ATING_CAP_RETENCAO",
+        "COMP_FC_RETENCAO",
+    ],
+
+    # metas de fornecedores (se existirem)
+    "fornecedor_1": [
+        "FORNECEDOR_1",
+        "FC_FORNECEDOR_1",
+        "PESO_FORNECEDOR_1",
+        "META_FORNECEDOR_1",
+        "REALIZADO_FORNECEDOR_1",
+        "ATINGIMENTO_FORNECEDOR_1",
+        "PESO_FORN1",
+        "META_FORN1",
+        "REALIZADO_FORN1",
+        "ATING_FORN1",
+        "ATING_CAP_FORN1",
+        "COMP_FC_FORN1",
+        "MOEDA_FORN1",
+    ],
+    "fornecedor_2": [
+        "FORNECEDOR_2",
+        "FC_FORNECEDOR_2",
+        "PESO_FORNECEDOR_2",
+        "META_FORNECEDOR_2",
+        "REALIZADO_FORNECEDOR_2",
+        "ATINGIMENTO_FORNECEDOR_2",
+        "PESO_FORN2",
+        "META_FORN2",
+        "REALIZADO_FORN2",
+        "ATING_FORN2",
+        "ATING_CAP_FORN2",
+        "COMP_FC_FORN2",
+        "MOEDA_FORN2",
+    ],
+
+    # FC total (às vezes reportado em colunas próprias)
+    "fc_total": [
+        "FC_TOTAL",
+        "FC_GERAL",
+        "FATOR_CORRECAO_FC",
+        "FATOR_CORRECAO",
+        "FC",
+    ],
+}
+
+
+def _match_group(header: str):
+    h = header.upper().strip()
+    for group, patterns in _FC_GROUP_PATTERNS.items():
+        for p in patterns:
+            if p in h:
+                return group
+    return None
+
+
+def _apply_group_fills_to_sheet(ws):
+    """
+    Pinta colunas inteiras do mesmo grupo (componente FC/meta/realizado/peso/atingimento)
+    com a mesma cor clara. Não altera valores.
+    """
+    header_row = 1
+    col_group = {}
+    max_col = ws.max_column
+    max_row = ws.max_row
+
+    for c in range(1, max_col + 1):
+        cell = ws.cell(row=header_row, column=c)
+        group = _match_group(str(cell.value) if cell.value is not None else "")
+        if group:
+            col_group[c] = group
+
+    if not col_group:
+        return
+
+    group_keys = sorted(set(col_group.values()))
+    color_for_group = {}
+    for idx, g in enumerate(group_keys):
+        color_for_group[g] = _light_fill(_PALETTE[idx % len(_PALETTE)])
+
+    for c, g in col_group.items():
+        fill = color_for_group[g]
+        for r in range(1, max_row + 1):
+            ws.cell(row=r, column=c).fill = fill
+
+
+def style_output_workbook(xlsx_path: str):
+    """
+    Carrega o arquivo Excel gerado e aplica a coloração de grupos
+    nas abas COMISSOES_CALCULADAS e RECONCILIACOES/RECONCILIACAO.
+    """
+    try:
+        wb = load_workbook(xlsx_path)
+    except Exception:
+        return
+
+    targets = []
+    for name in ("COMISSOES_CALCULADAS", "RECONCILIACOES", "RECONCILIACAO"):
+        if name in wb.sheetnames:
+            targets.append(name)
+
+    for sheet_name in targets:
+        ws = wb[sheet_name]
+        _apply_group_fills_to_sheet(ws)
+
+    wb.save(xlsx_path)
+
 
 def _normalize_text(s):
     if pd.isna(s):
@@ -1401,7 +1655,7 @@ class CalculoComissao:
 
 
     def _executar_reconciliacoes(self):
-        print("Iniciando reconciliações de comissões por recebimento...")
+        _info("Iniciando reconciliações de comissões por recebimento...")
         self.reconciliacao_detalhada_list = []
         self.reconciliacao_resumo_list = []
 
@@ -1411,7 +1665,7 @@ class CalculoComissao:
             pass
         estado_df = getattr(self, 'estado', None)
         if estado_df is None or estado_df.empty:
-            print("  Nenhum processo elegível no estado. Reconciliações não executadas.")
+            _info("  Nenhum processo elegível no estado. Reconciliações não executadas.")
             return
         for idx, row in estado_df.iterrows():
             proc = row.get('PROCESSO')
@@ -1451,7 +1705,7 @@ class CalculoComissao:
             try:
                 linhas_detalhadas, comissao_correta_total = self._gerar_reconciliacao_detalhada_processo(proc_str)
                 if not linhas_detalhadas:
-                    print(f"  [AVISO] Reconciliação para {proc_str} não gerou linhas. Pulando.")
+                    _info(f"  [AVISO] Reconciliação para {proc_str} não gerou linhas. Pulando.")
                     continue
 
                 saldo_final = comissao_correta_total - total_adiantado
@@ -1466,9 +1720,9 @@ class CalculoComissao:
                     self.estado.loc[idx, 'STATUS_RECONCILIACAO'] = 'Realizada'
                 except Exception:
                     pass
-                print(f"  [SUCESSO] Reconciliação para {proc_str} concluída. Saldo: {saldo_final:.2f}")
+                _info(f"  [SUCESSO] Reconciliação para {proc_str} concluída. Saldo: {saldo_final:.2f}")
             except Exception as e:
-                print(f"  [ERRO] Falha ao processar reconciliação para {proc_str}: {e}")
+                _info(f"  [ERRO] Falha ao processar reconciliação para {proc_str}: {e}")
                 try:
                     self.estado.loc[idx, 'STATUS_RECONCILIACAO'] = f'Erro: {e}'
                 except Exception:
@@ -1560,13 +1814,13 @@ class CalculoComissao:
 
         df_analise = self.data.get('ANALISE_COMERCIAL_COMPLETA', pd.DataFrame())
         if df_analise is None or df_analise.empty:
-            print(f"    [Reconc-Info] Processo {proc_id} não encontrado no Analise_Comercial_Completa.")
+            _debug(f"    [Reconc-Info] Processo {proc_id} não encontrado no Analise_Comercial_Completa.")
             return [], 0.0
 
         proc_str = str(proc_id).strip()
         proc_col = _match_column(df_analise, ['processo'])
         if proc_col is None:
-            print(f"    [Reconc-Erro] Coluna 'processo' não encontrada para localizar {proc_id}.")
+            _debug(f"    [Reconc-Erro] Coluna 'processo' não encontrada para localizar {proc_id}.")
             return [], 0.0
         df_itens_processo = df_analise[df_analise[proc_col].astype(str).str.strip() == proc_str].copy()
         if df_itens_processo.empty:
@@ -1576,29 +1830,29 @@ class CalculoComissao:
             except Exception:
                 df_itens_processo = pd.DataFrame()
         if df_itens_processo.empty:
-            print(f"    [Reconc-Info] Processo {proc_id} não encontrado no Analise_Comercial_Completa.")
+            _debug(f"    [Reconc-Info] Processo {proc_id} não encontrado no Analise_Comercial_Completa.")
             return [], 0.0
 
         data_col = _match_column(df_itens_processo, ['dt emissão', 'dt emissao', 'data emissão', 'data emissao'])
         if data_col is None:
-            print(f"    [Reconc-Erro] Não foi possível identificar a coluna de data de emissão para {proc_id}.")
+            _debug(f"    [Reconc-Erro] Não foi possível identificar a coluna de data de emissão para {proc_id}.")
             return [], 0.0
         data_emissao = pd.to_datetime(df_itens_processo[data_col].iloc[0], dayfirst=True, errors='coerce')
         if pd.isna(data_emissao):
-            print(f"    [Reconc-Erro] Não foi possível ler Dt Emissão para {proc_id}.")
+            _debug(f"    [Reconc-Erro] Não foi possível ler Dt Emissão para {proc_id}.")
             return [], 0.0
         mes_fat = int(data_emissao.month)
         ano_fat = int(data_emissao.year)
-        print(f"    [Reconc-Info] Processando {proc_id} para Mês/Ano: {mes_fat:02d}/{ano_fat}")
+        _debug(f"    [Reconc-Info] Processando {proc_id} para Mês/Ano: {mes_fat:02d}/{ano_fat}")
 
-        print(f"      Carregando dados realizados para {mes_fat:02d}/{ano_fat}...")
+        _debug(f"      Carregando dados realizados para {mes_fat:02d}/{ano_fat}...")
         try:
             try:
                 df_fat_hist, df_conv_hist, df_fat_ytd_hist, df_ret_hist = preparar_dados_mensais.prepare_dataframes_for_month(mes_fat, ano_fat, data_path=self.base_path)
             except TypeError:
                 df_fat_hist, df_conv_hist, df_fat_ytd_hist, df_ret_hist = preparar_dados_mensais.prepare_dataframes_for_month(mes_fat, ano_fat)
         except Exception as e:
-            print(f"    [Reconc-Erro] Falha ao carregar dados históricos via preparar_dados_mensais para {mes_fat:02d}/{ano_fat}: {e}")
+            _debug(f"    [Reconc-Erro] Falha ao carregar dados históricos via preparar_dados_mensais para {mes_fat:02d}/{ano_fat}: {e}")
             return [], 0.0
 
         df_fat_hist = df_fat_hist if isinstance(df_fat_hist, pd.DataFrame) else pd.DataFrame()
@@ -1621,9 +1875,9 @@ class CalculoComissao:
                 rentab_filename_used = rent_csv
             else:
                 raise FileNotFoundError(f"Arquivo de rentabilidade não encontrado: {rent_xlsx}")
-            print(f"      Sucesso ao carregar {rentab_filename_used}")
+            _debug(f"      Sucesso ao carregar {rentab_filename_used}")
         except Exception as e:
-            print(f"    [Reconc-Erro] Falha ao carregar rentabilidade histórica '{rentab_filename_used}': {e}. Rentabilidade será 0.")
+            _debug(f"    [Reconc-Erro] Falha ao carregar rentabilidade histórica '{rentab_filename_used}': {e}. Rentabilidade será 0.")
             df_rentab_hist = pd.DataFrame()
 
         col_valor_fat = _match_column(df_fat_hist, ['valor realizado', 'valor_realizado', 'valor nf', 'faturamento'])
@@ -1705,7 +1959,7 @@ class CalculoComissao:
             if getattr(self, '_logger', None):
                 self._logger.info(f"[Reconc-Debug] realizados_hist sizes: " + ", ".join(f"{k}={getattr(v, 'shape', 'series') or len(v)}" for k,v in realizados_hist.items()))
             else:
-                print("[Reconc-Debug] realizados_hist keys:", list(realizados_hist.keys()))
+                _debug("[Reconc-Debug] realizados_hist keys: " + str(list(realizados_hist.keys())))
         except Exception:
             pass
         try:
@@ -1771,7 +2025,7 @@ class CalculoComissao:
                         present = not df_colabs[df_colabs.get('__norm_nome_colaborador','') == norm].empty if '__norm_nome_colaborador' in df_colabs.columns else False
                         self._logger.info(f"[Reconc-Debug] colaborador '{nome_t}' present in COLABORADORES? {present}")
                 else:
-                    print("[Reconc-Debug] recebe_por_recebimento (norm):", sorted(list(recebe_set_norm)))
+                    _debug("[Reconc-Debug] recebe_por_recebimento (norm): " + str(sorted(list(recebe_set_norm))))
             except Exception:
                 pass
             linhas_reconciliacao_detalhada = []
@@ -1819,7 +2073,7 @@ class CalculoComissao:
                     if getattr(self, '_logger', None):
                         self._logger.info(f"[Reconc-Debug] combined candidates for item (proc={proc_str}): {combined.to_dict(orient='records')}")
                     else:
-                        print(f"[Reconc-Debug] combined candidates for item (proc={proc_str}):", combined.to_dict(orient='records'))
+                        _debug(f"[Reconc-Debug] combined candidates for item (proc={proc_str}): {combined.to_dict(orient='records')}")
                 except Exception:
                     pass
                 if combined.empty:
@@ -1862,7 +2116,7 @@ class CalculoComissao:
                     try:
                         fator_correcao_final, detalhes_fc_item = self._calcular_fc_para_item(colab_nome, colab_cargo, item)
                     except Exception as e:
-                        print(f"    [Reconc-Erro] Falha ao calcular FC para {colab_nome} no processo {proc_id}: {e}")
+                        _info(f"    [Reconc-Erro] Falha ao calcular FC para {colab_nome} no processo {proc_id}: {e}")
                         continue
 
                     comissao_calculada = comissao_base * fator_correcao_final
@@ -2044,7 +2298,22 @@ class CalculoComissao:
         except Exception as e:
             self._log_validacao('AVISO', f'Erro na detecção de cross-selling: {e}', {})
 
+        try:
+            total_items_step5 = len(df_faturados) if df_faturados is not None else 0
+        except Exception:
+            total_items_step5 = 0
+        processed_step5 = 0
+        progress_step5_mod = max(1, total_items_step5 // 100) if total_items_step5 else 1
+        _progress_step5(0, total_items_step5)
+
         for _, item_faturado in df_faturados.iterrows():
+            processed_step5 += 1
+            if (
+                processed_step5 == total_items_step5
+                or processed_step5 % progress_step5_mod == 0
+                or processed_step5 % 100 == 0
+            ):
+                _progress_step5(processed_step5, total_items_step5)
             contexto_item = {
                 'linha': item_faturado['Negócio'], 'grupo': item_faturado['Grupo'],
                 'subgrupo': item_faturado['Subgrupo'], 'tipo_mercadoria': item_faturado['Tipo de Mercadoria']
@@ -2105,7 +2374,7 @@ class CalculoComissao:
                         if getattr(self, '_logger', None):
                             self._logger.info(f"[Reconc-Debug] Fallback: usando colaboradores de COLABORADORES para reconciliacao: {colaboradores_para_comissionar.to_dict(orient='records')}")
                         else:
-                            print("[Reconc-Debug] Fallback: usando colaboradores de COLABORADORES para reconciliacao:", colaboradores_para_comissionar.to_dict(orient='records'))
+                            _debug("[Reconc-Debug] Fallback: usando colaboradores de COLABORADORES para reconciliacao: " + str(colaboradores_para_comissionar.to_dict(orient='records')))
             except Exception:
                 pass
 
@@ -2255,8 +2524,14 @@ class CalculoComissao:
 
                 # Após popular todas as colunas de detalhe do FC, anexar a linha apenas uma vez
                 comissoes_calculadas.append(base_dict)
-        
+
                 self.comissoes_df = pd.DataFrame(comissoes_calculadas)
+
+        if total_items_step5 and processed_step5 < total_items_step5:
+            _progress_step5(total_items_step5, total_items_step5)
+        elif total_items_step5 == 0:
+            sys.stdout.write("\n")
+        _info(f"[Resumo] Etapa 5 concluída: {processed_step5} itens processados.")
 
     def _handle_cross_selling_prompt(self, processo, consultor, linha, taxa):
         """Mostra prompt interativo no terminal para decisão A ou B sobre o cross-selling.
@@ -2489,21 +2764,21 @@ class CalculoComissao:
         
         try:
             doc.build(story)
-            print(f"PDF de detalhamento gerado: {nome_arquivo_pdf}")
+            _info(f"PDF de detalhamento gerado: {nome_arquivo_pdf}")
         except KeyboardInterrupt:
             # Não propagar interrupção do usuário; registrar e seguir
             self._log_validacao('AVISO', 'Geração de PDF interrompida pelo usuário (KeyboardInterrupt). PDF não gerado.', {})
-            print("Geração de PDF interrompida pelo usuário. PDF não gerado.")
+            _info("Geração de PDF interrompida pelo usuário. PDF não gerado.")
         except BaseException as e:
             # Captura falhas do reportlab (layout, encoding, etc.) e registra sem interromper o fluxo
             self._log_validacao('AVISO', f'Falha ao gerar PDF de detalhamento: {e}', {})
-            print(f"Aviso: falha ao gerar PDF de detalhamento: {e}")
+            _info(f"Aviso: falha ao gerar PDF de detalhamento: {e}")
 
 
     def _gerar_saida(self):
         """Gera o arquivo Excel com todas as abas de resultado e o PDF de detalhamento."""
         if not hasattr(self, 'comissoes_df') or self.comissoes_df.empty:
-            print("Nenhuma comissão foi calculada. O arquivo de saída não será gerado.")
+            _info("Nenhuma comissão foi calculada. O arquivo de saída não será gerado.")
             self._log_validacao("ERRO", "Cálculo final vazio", "Nenhuma comissão pôde ser calculada com base nos dados.")
             self.comissoes_df = pd.DataFrame()
 
@@ -2953,14 +3228,14 @@ class CalculoComissao:
                         if colunas_base:
                             df_reconciliacao_detalhada = df_reconciliacao_detalhada[colunas_base + colunas_extra]
                 else:
-                    print("Nenhuma reconciliação foi processada. Aba 'RECONCILIACAO' ficará vazia.")
+                    _info("Nenhuma reconciliação foi processada. Aba 'RECONCILIACAO' ficará vazia.")
                     if hasattr(self, 'comissoes_df') and isinstance(self.comissoes_df, pd.DataFrame):
                         df_reconciliacao_detalhada = pd.DataFrame(columns=self.comissoes_df.columns)
                     else:
                         df_reconciliacao_detalhada = pd.DataFrame()
 
                 df_reconciliacao_detalhada.to_excel(writer, sheet_name='RECONCILIACAO', index=False)
-                print(f"Aba 'RECONCILIACAO' (Detalhada) gerada com {len(df_reconciliacao_detalhada)} linhas.")
+                _info(f"Aba 'RECONCILIACAO' (Detalhada) gerada com {len(df_reconciliacao_detalhada)} linhas.")
 
                 if resumo:
                     df_reconciliacao_resumo = pd.DataFrame(resumo)
@@ -2971,7 +3246,7 @@ class CalculoComissao:
                         index=False,
                         startrow=start_row_resumo
                     )
-                    print("Resumo de reconciliação adicionado ao final da aba.")
+                    _info("Resumo de reconciliação adicionado ao final da aba.")
             except Exception as e:
                 self._log_validacao('AVISO', f'Falha ao escrever RECONCILIACAO: {e}', {})
 
@@ -2982,9 +3257,14 @@ class CalculoComissao:
             except Exception as e:
                 self._log_validacao('AVISO', f'Falha ao escrever ESTADO no arquivo de saída: {e}', {})
         
-        print(f"\nCálculo finalizado. Arquivo de saída Excel gerado: {NOME_ARQUIVO_SAIDA}")
-        print("\n--- RESUMO POR COLABORADOR ---")
-        print(df_resumo.to_string(index=False))
+        try:
+            style_output_workbook(NOME_ARQUIVO_SAIDA)
+        except Exception:
+            pass
+
+        _info(f"\nCálculo finalizado. Arquivo de saída Excel gerado: {NOME_ARQUIVO_SAIDA}")
+        _info("\n--- RESUMO POR COLABORADOR ---")
+        _info(df_resumo.to_string(index=False))
 
         try:
             # Logamos aqui a tentativa explícita de gerar o PDF para facilitar diagnóstico
@@ -2993,35 +3273,35 @@ class CalculoComissao:
                     self._logger.info('Tentativa de gerar PDF de detalhamento (reportlab disponível)')
                 self._gerar_detalhamento_pdf()
             else:
-                print('\nAVISO: A biblioteca "reportlab" não está instalada. O PDF não será gerado.')
+                _info('\nAVISO: A biblioteca "reportlab" não está instalada. O PDF não será gerado.')
                 self._log_validacao('AVISO', 'Biblioteca reportlab ausente; PDF não gerado.', {})
         except Exception as e:
             if not REPORTLAB_DISPONIVEL:
-                print("\nAVISO: A biblioteca 'reportlab' não está instalada.")
-                print("Para gerar o PDF de detalhamento, instale-a com: pip install reportlab")
+                _info("\nAVISO: A biblioteca 'reportlab' não está instalada.")
+                _info("Para gerar o PDF de detalhamento, instale-a com: pip install reportlab")
             else:
-                print(f"\nOcorreu um erro ao gerar o PDF de detalhamento: {e}")
+                _info(f"\nOcorreu um erro ao gerar o PDF de detalhamento: {e}")
 
     def executar(self):
         """Executa o fluxo completo de cálculo de comissões."""
-        print("Iniciando cálculo de comissões...")
-        print("1. Carregando arquivos...")
+        _info("Iniciando cálculo de comissões...")
+        _phase("1. Carregando arquivos...")
         self._carregar_dados()
-        print("2. Validando dados...")
+        _phase("2. Validando dados...")
         self._validar_dados()
-        print("3. Pré-processando informações...")
+        _phase("3. Pré-processando informações...")
         self._preprocessar_dados()
-        print("4. Calculando valores realizados agregados...")
+        _phase("4. Calculando valores realizados agregados...")
         self._calcular_realizado()
-        print("5. Calculando comissões e FC item a item...")
+        _phase("5. Calculando comissões e FC item a item...")
         self._calcular_comissoes()
         # Carregar estado (se existir) e processar recebimentos/reconciliações
-        print("5.1 Carregando estado de recebimentos e aplicando adiantamentos (se houver)...")
+        _phase("5.1 Carregando estado de recebimentos e aplicando adiantamentos (se houver)...")
         self._carregar_estado()
         self._aplicar_adiantamentos_recebimentos()
-        print("5.2 Executando reconciliações de processos quitados...")
+        _phase("5.2 Executando reconciliações de processos quitados...")
         self._executar_reconciliacoes()
-        print("6. Gerando arquivos de saída...")
+        _phase("6. Gerando arquivos de saída...")
         self._gerar_saida()
         # Salvar estado persistente (obrigatório)
         try:
@@ -3106,9 +3386,9 @@ if __name__ == '__main__':
         try:
             import subprocess, os
             if skip_clean:
-                print(f"PULANDO scripts de limpeza por flag --skip-clean/ENV para {mes}/{ano}.")
+                _info(f"PULANDO scripts de limpeza por flag --skip-clean/ENV para {mes}/{ano}.")
             else:
-                print(f"Executando script de limpeza de recebimentos para {mes}/{ano}...")
+                _info(f"Executando script de limpeza de recebimentos para {mes}/{ano}...")
                 r1 = subprocess.run([sys.executable, 'limpeza_recebimentos.py', str(mes), str(ano)], text=True, check=False)
                 if r1.returncode != 0:
                     print(f"ERRO: o script 'limpeza_recebimentos.py' retornou código {r1.returncode}. Abortando.")
@@ -3117,7 +3397,7 @@ if __name__ == '__main__':
                     print("ERRO: arquivo 'Recebimentos_do_Mes.xlsx' não foi gerado pelo script de limpeza. Abortando.")
                     sys.exit(1)
 
-                print(f"Executando script de limpeza de status de pagamentos para {mes}/{ano}...")
+                _info(f"Executando script de limpeza de status de pagamentos para {mes}/{ano}...")
                 r2 = subprocess.run([sys.executable, 'limpeza_status_pagamentos.py', str(mes), str(ano)], text=True, check=False)
                 if r2.returncode != 0:
                     print(f"ERRO: o script 'limpeza_status_pagamentos.py' retornou código {r2.returncode}. Abortando.")
@@ -3125,7 +3405,7 @@ if __name__ == '__main__':
                 if not os.path.exists('Status_Pagamentos_Processos.xlsx'):
                     print("ERRO: arquivo 'Status_Pagamentos_Processos.xlsx' não foi gerado pelo script de limpeza. Abortando.")
                     sys.exit(1)
-                print("Scripts de limpeza executados com sucesso.")
+                _info("Scripts de limpeza executados com sucesso.")
         except Exception as e:
             print(f"AVISO: falha ao executar os scripts de limpeza automaticamente: {e}. Abortando.")
             sys.exit(1)
@@ -3138,7 +3418,7 @@ if __name__ == '__main__':
             # returned DataFrames local to avoid writing or overwriting any
             # run-start artifact files. The per-process retroactive flow will
             # still call the helper later when needed.
-            print(f"Executando o preparador de dados (in-process, validation-only) para {mes}/{ano}...")
+            _info(f"Executando o preparador de dados (in-process, validation-only) para {mes}/{ano}...")
             try:
                 import importlib.util, os
                 prep_path = os.path.join(os.getcwd(), 'preparar_dados_mensais.py')
@@ -3152,11 +3432,11 @@ if __name__ == '__main__':
                 nc = 0 if prep_conversoes is None else len(prep_conversoes)
                 ny = 0 if prep_faturados_ytd is None else len(prep_faturados_ytd)
                 nr = 0 if prep_retencao is None else len(prep_retencao)
-                print(f"Preparador (validation-only) finalizado: Faturados({nf}), Conversões({nc}), Faturados_YTD({ny}), Retencao({nr})")
+                _info(f"Preparador (validation-only) finalizado: Faturados({nf}), Conversões({nc}), Faturados_YTD({ny}), Retencao({nr})")
             except Exception as e_prep:
-                print(f"AVISO: falha ao executar preparador in-process para validação: {e_prep}; pular validação.")
+                _info(f"AVISO: falha ao executar preparador in-process para validação: {e_prep}; pular validação.")
         except Exception as e:
-            print(f"AVISO: falha ao executar o preparador automaticamente: {e}. Continuando mesmo assim.")
+            _info(f"AVISO: falha ao executar o preparador automaticamente: {e}. Continuando mesmo assim.")
         # Atualizar variáveis de arquivo para usar arquivos gerados pelo preparador (os nomes fixos esperados)
         ARQUIVO_FATURADOS = "Faturados.xlsx"
         ARQUIVO_CONVERSOES = "Conversões.xlsx"
@@ -3169,21 +3449,17 @@ if __name__ == '__main__':
         encontrados = glob.glob(f"rentabilidades/*{mm}*{ano}*agrupada*.xlsx")
         if encontrados:
             ARQUIVO_RENTABILIDADE = encontrados[0]
-            print(f"Usando arquivo de rentabilidade: {ARQUIVO_RENTABILIDADE}")
+            _info(f"Usando arquivo de rentabilidade: {ARQUIVO_RENTABILIDADE}")
         else:
             # fallback para nome padrão caso não encontre agrupada
             padrao = f"rentabilidades/rentabilidade_{mm}_{ano}_agrupada.xlsx"
             if os.path.exists(padrao):
                 ARQUIVO_RENTABILIDADE = padrao
-                print(f"Usando arquivo de rentabilidade: {ARQUIVO_RENTABILIDADE}")
+                _info(f"Usando arquivo de rentabilidade: {ARQUIVO_RENTABILIDADE}")
             else:
-                print(f"Aviso: não foi encontrado arquivo de rentabilidade agrupada para {mm}/{ano} na pasta 'rentabilidades'. Procurados: {candidato}")
+                _info(f"Aviso: não foi encontrado arquivo de rentabilidade agrupada para {mm}/{ano} na pasta 'rentabilidades'. Procurados: {candidato}")
 
         calculadora = CalculoComissao()
         calculadora.executar()
     except Exception as e:
         print(f"\nOcorreu um erro fatal durante a execução: {e}")
-
-
-
-
