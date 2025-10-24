@@ -619,12 +619,12 @@ class CalculoComissao:
                             else:
                                 faturamento_convertido = 0.0
                             # Log mensal detalhado
-                    try:
-                        if logger and logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(f"Fornecedor#{idx} mes={mes}: soma_brl={soma_brl:.2f} taxa_mes={taxa_mes} faturamento_convertido={faturamento_convertido:.4f}")
-                    except Exception:
-                        pass
-                    faturamento_realizado_ytd += faturamento_convertido
+                            try:
+                                if logger and logger.isEnabledFor(logging.DEBUG):
+                                    logger.debug(f"Fornecedor#{idx} mes={mes}: soma_brl={soma_brl:.2f} taxa_mes={taxa_mes} faturamento_convertido={faturamento_convertido:.4f}")
+                            except Exception:
+                                pass
+                            faturamento_realizado_ytd += faturamento_convertido
 
                     # Cálculo do atingimento e componente
                     try:
@@ -655,6 +655,54 @@ class CalculoComissao:
                     except Exception:
                         pass
                     # Coleta de depuração para este cálculo de fornecedor
+                    # Sanity-check: recompute converted faturamento from the ON-DISK FATURADOS_YTD file and taxas
+                    try:
+                        safe_total = 0.0
+                        # try to reload the source FATURADOS_YTD from disk to avoid mutated in-memory frames
+                        try:
+                            faturados_ytd_disk = pd.read_excel(ARQUIVO_FATURADOS_YTD)
+                        except Exception:
+                            # fallback: use whatever is in memory
+                            faturados_ytd_disk = self.data.get('FATURADOS_YTD', pd.DataFrame())
+
+                        # find fabricante and valor columns
+                        if not faturados_ytd_disk.empty:
+                            fab_col = next((c for c in faturados_ytd_disk.columns if 'fabricante' in str(c).lower() or 'fornecedor' in str(c).lower()), None)
+                            val_col = next((c for c in faturados_ytd_disk.columns if 'valor' in str(c).lower()), None)
+                            dt_col_local = next((c for c in faturados_ytd_disk.columns if 'dt' in str(c).lower() or 'data' in str(c).lower()), None)
+                            if fab_col and val_col:
+                                # filter case-insensitive
+                                filt_disk = faturados_ytd_disk[faturados_ytd_disk[fab_col].astype(str).str.upper().str.contains(str(fornecedor_nome).upper(), na=False)].copy()
+                                if dt_col_local and dt_col_local in filt_disk.columns:
+                                    filt_disk['mes'] = pd.to_datetime(filt_disk[dt_col_local], errors='coerce').dt.month
+                                else:
+                                    filt_disk['mes'] = mes_apuracao
+                                for m in range(1, int(mes_apuracao) + 1):
+                                    soma_brl = filt_disk[filt_disk['mes'] == m][val_col].sum() if not filt_disk.empty else 0.0
+                                    taxa_m = None
+                                    if moeda and taxas and moeda in taxas and m in taxas[moeda]:
+                                        taxa_m = taxas[moeda].get(m)
+                                    if taxa_m and taxa_m != 0:
+                                        safe_total += float(soma_brl) * float(taxa_m)
+                    except Exception:
+                        safe_total = faturamento_realizado_ytd
+
+                    # If the computed total differs wildly from the runtime value (or runtime value is absurd), prefer the recomputed safe_total
+                    try:
+                        if (faturamento_realizado_ytd is None) or (abs(faturamento_realizado_ytd) > 1e6) or (abs(faturamento_realizado_ytd - safe_total) > max(1e3, abs(0.1 * safe_total))):
+                            # Log a validation warning and replace the value to avoid propagation of absurd numbers
+                            self._log_validacao('AVISO', f'Valor de faturamento_realizado_ytd anômalo detectado para fornecedor {fornecedor_nome} (orig={faturamento_realizado_ytd}, recomputed={safe_total}). Substituindo pelo valor recomputado.', {'fornecedor': fornecedor_nome, 'orig': faturamento_realizado_ytd, 'recomputed': safe_total})
+                            faturamento_realizado_ytd = safe_total
+                            # recompute atingimento and component after replacement
+                            try:
+                                atingimento = (faturamento_realizado_ytd / meta_ytd) if meta_ytd and meta_ytd > 0 else 0.0
+                            except Exception:
+                                atingimento = 0.0
+                            atingimento_cap = min(atingimento, cap_atingimento)
+                            componente_fc_forn = atingimento_cap * peso_fornecedor
+                    except Exception:
+                        pass
+
                     debug_entry = {
                         'colaborador': nome_colab,
                         'cargo': cargo_colab,
