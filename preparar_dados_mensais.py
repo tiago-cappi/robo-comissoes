@@ -99,14 +99,14 @@ def gerar_faturados(df, mes, ano):
     if date_col is None:
         print("ERRO: não foi possível localizar coluna de data 'Dt Emissão' para faturados. Gerando arquivo vazio com cabeçalho.")
         # criar arquivo vazio com cabeçalho esperado
-    df_out = pd.DataFrame(columns=DEFAULT_WANTED_FATURADOS)
-    try:
-        df_out.to_excel(arquivo_saida, index=False)
-        print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_out)} linhas (vazio).")
-        return True
-    except Exception as e:
-        print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
-        return False
+        df_out = pd.DataFrame(columns=DEFAULT_WANTED_FATURADOS)
+        try:
+            df_out.to_excel(arquivo_saida, index=False)
+            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_out)} linhas (vazio).")
+            return True
+        except Exception as e:
+            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+            return False
 
     raw = df[date_col].astype(str).str.strip().replace({'nan': ''})
     raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
@@ -122,14 +122,14 @@ def gerar_faturados(df, mes, ano):
     if df_filtrado.empty:
         print("Nenhum dado encontrado para o período selecionado. Gerando 'Faturados.xlsx' vazio com cabeçalho.")
         # criar arquivo vazio com cabeçalho esperado
-    df_out = pd.DataFrame(columns=DEFAULT_WANTED_FATURADOS)
-    try:
-        df_out.to_excel(arquivo_saida, index=False)
-        print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_out)} linhas (vazio).")
-        return True
-    except Exception as e:
-        print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
-        return False
+        df_out = pd.DataFrame(columns=DEFAULT_WANTED_FATURADOS)
+        try:
+            df_out.to_excel(arquivo_saida, index=False)
+            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_out)} linhas (vazio).")
+            return True
+        except Exception as e:
+            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+            return False
 
     # aplicar filtro por operações (tolerante)
     operacoes_validas = {'FLOC','IMO2','OR19','P205','PSEM','PSER','SERV','PVEN','PVMA'}
@@ -216,14 +216,14 @@ def gerar_conversoes(df, mes, ano):
             'Aplicação Mat./Serv.', 'Cliente', 'Nome Cliente', 'Cidade', 'UF',
             'Tipo de Mercadoria', 'Subgrupo', 'Grupo', 'Negócio'
         ]
-    df_final = pd.DataFrame(columns=DEFAULT_CONVERSOES_COLS)
-    try:
-        df_final.to_excel(arquivo_saida, index=False)
-        print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_final)} linhas (vazio).")
-        return True
-    except Exception as e:
-        print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
-        return False
+        df_final = pd.DataFrame(columns=DEFAULT_CONVERSOES_COLS)
+        try:
+            df_final.to_excel(arquivo_saida, index=False)
+            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_final)} linhas (vazio).")
+            return True
+        except Exception as e:
+            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+            return False
 
     raw = df[data_aceite_col].astype(str).str.strip().replace({'nan': ''})
     raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
@@ -620,15 +620,15 @@ def gerar_faturados_ytd(df, mes, ano):
             break
     if date_col is None:
         print("ERRO: não foi possível encontrar coluna 'Dt Emissão' para gerar Faturados_YTD. Gerando arquivo vazio com cabeçalho.")
-    df_final = pd.DataFrame(columns=DEFAULT_YTD_WANTED)
-    try:
-        df_final.to_excel(arquivo_saida, index=False)
-        print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_final)} linhas (vazio).")
-        return True
-    except Exception as e:
-        print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
-        return False
-
+        df_final = pd.DataFrame(columns=DEFAULT_YTD_WANTED)
+        try:
+            df_final.to_excel(arquivo_saida, index=False)
+            print(f"Sucesso! O arquivo '{arquivo_saida}' foi gerado com {len(df_final)} linhas (vazio).")
+            return True
+        except Exception as e:
+            print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
+            return False
+    
     # Parse dates robustly
     raw = df[date_col].astype(str).str.strip().replace({'nan': ''})
     raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)

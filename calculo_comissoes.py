@@ -3410,27 +3410,9 @@ if __name__ == '__main__':
     # Faturados.xlsx, Conversões.xlsx, Faturados_YTD.xlsx e Retencao_Clientes.xlsx
     # sejam gerados para o mês/ano selecionado.
         try:
-            # Run the preparador in-process for validation only. Keep the
-            # returned DataFrames local to avoid writing or overwriting any
-            # run-start artifact files. The per-process retroactive flow will
-            # still call the helper later when needed.
-            _info(f"Executando o preparador de dados (in-process, validation-only) para {mes}/{ano}...")
-            try:
-                import importlib.util, os
-                prep_path = os.path.join(os.getcwd(), 'preparar_dados_mensais.py')
-                spec = importlib.util.spec_from_file_location('preparar_dados_mensais', prep_path)
-                if spec is None or spec.loader is None:
-                    raise ImportError(f"Não foi possível carregar o módulo preparador de {prep_path}")
-                prep = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(prep)
-                prep_faturados, prep_conversoes, prep_faturados_ytd, prep_retencao = prep.prepare_dataframes_for_month(int(mes), int(ano))
-                nf = 0 if prep_faturados is None else len(prep_faturados)
-                nc = 0 if prep_conversoes is None else len(prep_conversoes)
-                ny = 0 if prep_faturados_ytd is None else len(prep_faturados_ytd)
-                nr = 0 if prep_retencao is None else len(prep_retencao)
-                _info(f"Preparador (validation-only) finalizado: Faturados({nf}), Conversões({nc}), Faturados_YTD({ny}), Retencao({nr})")
-            except Exception as e_prep:
-                _info(f"AVISO: falha ao executar preparador in-process para validação: {e_prep}; pular validação.")
+            _info(f"Executando o preparador de dados para {mes}/{ano}...")
+            if not preparar_dados_mensais.run_preparador(int(mes), int(ano)):
+                _info("AVISO: preparador retornou falha; verifique os logs antes de prosseguir.")
         except Exception as e:
             _info(f"AVISO: falha ao executar o preparador automaticamente: {e}. Continuando mesmo assim.")
         # Atualizar variáveis de arquivo para usar arquivos gerados pelo preparador (os nomes fixos esperados)
