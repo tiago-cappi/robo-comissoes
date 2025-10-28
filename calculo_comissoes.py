@@ -1482,28 +1482,57 @@ class CalculoComissao:
                 total_unmatched = 0
                 # helper: tenta mapear um recebimento usando apenas a tabela ANALISE_COMERCIAL_COMPLETA
                 def _map_recebimento(proc_val, valor_val, id_cliente_val, df_map_local):
-                    proc_s = str(proc_val).strip()
-                    # 1) exact match
-                    if 'Processo' in df_map_local.columns:
-                        exact = df_map_local[df_map_local['Processo'].astype(str).str.strip() == proc_s]
-                        if not exact.empty:
-                            return exact.iloc[0], 'exact_map'
+                    # Normalizar processo para comparar números equivalentes (ex.: 999999 vs 999999.0)
+                    def _norm_proc(v):
+                        try:
+                            s = str(v).strip()
+                            # se for numerico-like, converter para int para remover .0
+                            if s.replace('.', '', 1).isdigit():
+                                try:
+                                    if '.' in s:
+                                        f = float(s)
+                                        i = int(f)
+                                        if f == float(i):
+                                            return str(i)
+                                except Exception:
+                                    pass
+                                # número inteiro puro como string
+                                return str(int(float(s)))
+                            return s
+                        except Exception:
+                            return str(v).strip()
 
-                    # 2) substring match (proc string inside map.Processo or vice versa)
+                    proc_s = _norm_proc(proc_val)
+                    # 1) exact match (normalizado)
                     if 'Processo' in df_map_local.columns:
-                        map_proc_strs = df_map_local['Processo'].astype(str).str.strip()
-                        mask_sub = map_proc_strs.apply(lambda x: (x in proc_s) or (proc_s in x))
+                        map_proc_norm = df_map_local['Processo'].apply(_norm_proc)
+                        exact_idx = map_proc_norm == proc_s
+                        if exact_idx.any():
+                            return df_map_local[exact_idx].iloc[0], 'exact_map'
+
+                    # 2) substring match (normalizado)
+                    if 'Processo' in df_map_local.columns:
+                        map_proc_norm = df_map_local['Processo'].apply(_norm_proc)
+                        mask_sub = map_proc_norm.apply(lambda x: (x in proc_s) or (proc_s in x))
                         cand = df_map_local[mask_sub]
                         if not cand.empty:
                             # choose candidate closest by amount when possible
                             if 'Valor Realizado' in cand.columns and valor_val is not None:
                                 cand = cand.copy()
-                                cand['diff'] = cand['Valor Realizado'].apply(lambda x: abs((float(x) if pd.notna(x) else 0.0) - float(valor_val)))
-                                cand_sorted = cand.sort_values('diff')
-                                return cand_sorted.iloc[0], 'substring_amount_best'
+                                try:
+                                    cand['diff'] = cand['Valor Realizado'].apply(lambda x: abs((float(x) if pd.notna(x) else 0.0) - float(valor_val)))
+                                    cand_sorted = cand.sort_values('diff')
+                                    return cand_sorted.iloc[0], 'substring_amount_best'
+                                except Exception:
+                                    pass
                             return cand.iloc[0], 'substring_first'
 
                     # 3) no match
+                    if getattr(self, '_logger', None):
+                        try:
+                            self._logger.info(f"[Receb] Sem mapeamento para processo {proc_val} (normalizado='{proc_s}') em {map_source}.")
+                        except Exception:
+                            pass
                     return None, None
 
                     # 3) match by client + approximate amount

@@ -108,20 +108,37 @@ def gerar_faturados(df, mes, ano):
             print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
             return False
 
+    print(f"[DEBUG Faturados] Coluna de data detectada: '{date_col}'")
     raw = df[date_col].astype(str).str.strip().replace({'nan': ''})
     raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
-    parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
-    parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
-    parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
+    print(f"[DEBUG Faturados] Amostra Dt Emissão (bruto): {raw.head(5).tolist()}")
+    # Detect ISO-like (year-first) formats and prefer yearfirst parsing when prevalent
+    try:
+        iso_like = raw_clean.str.match(r'^\s*\d{4}[-/]')
+        iso_count = int(iso_like.fillna(False).sum())
+        print(f"[DEBUG Faturados] Linhas com padrão ano-primeiro (YYYY-...): {iso_count} de {len(raw_clean)}")
+    except Exception:
+        iso_count = 0
+    if iso_count >= max(1, int(0.5 * len(raw_clean))):
+        parsed = pd.to_datetime(raw_clean, yearfirst=True, errors='coerce')
+    else:
+        parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
+        parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
+        parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
     df[date_col] = parsed
+    print(f"[DEBUG Faturados] Tipo após parse: {df[date_col].dtype}, válidas: {int(df[date_col].notna().sum())} de {len(df)}")
+    try:
+        amostra = df[date_col].dropna().astype(str).head(5).tolist()
+        print(f"[DEBUG Faturados] Amostra Dt Emissão (parse): {amostra}")
+    except Exception:
+        pass
 
     filtro = (df[date_col].dt.month == mes) & (df[date_col].dt.year == ano)
     df_filtrado = df[filtro].copy()
-    print(f"Encontradas {len(df_filtrado)} linhas para o período de {mes}/{ano} (Dt Emissão).")
+    print(f"[DEBUG Faturados] Encontradas {len(df_filtrado)} linhas para {mes:02d}/{ano} por Dt Emissão.")
 
     if df_filtrado.empty:
-        print("Nenhum dado encontrado para o período selecionado. Gerando 'Faturados.xlsx' vazio com cabeçalho.")
-        # criar arquivo vazio com cabeçalho esperado
+        print("Nenhum dado encontrado para o período selecionado por Dt Emissão. Gerando 'Faturados.xlsx' vazio com cabeçalho.")
         df_out = pd.DataFrame(columns=DEFAULT_WANTED_FATURADOS)
         try:
             df_out.to_excel(arquivo_saida, index=False)
@@ -139,17 +156,23 @@ def gerar_faturados(df, mes, ano):
             op_col = c
             break
     if op_col is not None:
+        print(f"[DEBUG Faturados] Coluna 'Operação' detectada: '{op_col}'. Aplicando filtro de operações válidas.")
         before_ops = len(df_filtrado)
         df_filtrado['operacao_codigo'] = (
             df_filtrado[op_col].astype(str).str.strip()
             .str.split(' - ', n=1).str[0]
             .str.split().str[0].str.upper()
         )
+        try:
+            unique_codes = sorted(df_filtrado['operacao_codigo'].dropna().unique().tolist())
+            print(f"[DEBUG Faturados] Códigos de operação detectados: {unique_codes}")
+        except Exception:
+            pass
         df_filtrado = df_filtrado[df_filtrado['operacao_codigo'].isin(operacoes_validas)].copy()
         if 'operacao_codigo' in df_filtrado.columns:
             df_filtrado = df_filtrado.drop(columns=['operacao_codigo'])
         after_ops = len(df_filtrado)
-        print(f"Filtragem por operação aplicada: {before_ops} -> {after_ops} linhas.")
+        print(f"[DEBUG Faturados] Filtragem por operação: {before_ops} -> {after_ops} linhas.")
     else:
         print("AVISO: coluna 'Operação' não encontrada; gerando faturados sem filtro por operação.")
 
@@ -463,12 +486,20 @@ def prepare_dataframes_for_month(mes: int, ano: int):
         if date_col is not None:
             raw = df_analise[date_col].astype(str).str.strip().replace({'nan': ''})
             raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
-            parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
-            parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
-            # prefer the parse with fewer NaNs, but if the chosen parse is all NaT, force dayfirst=True fallback
-            parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
-            if parsed.isna().all():
-                parsed = parsed1
+            # Prefer year-first when the majority of rows match ISO-like pattern
+            try:
+                iso_like = raw_clean.str.match(r'^\s*\d{4}[-/]')
+                iso_count = int(iso_like.fillna(False).sum())
+            except Exception:
+                iso_count = 0
+            if iso_count >= max(1, int(0.5 * len(raw_clean))):
+                parsed = pd.to_datetime(raw_clean, yearfirst=True, errors='coerce')
+            else:
+                parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
+                parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
+                parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
+                if parsed.isna().all():
+                    parsed = parsed1
             df_analise[date_col] = parsed
             filtro = (df_analise[date_col].dt.month == mes) & (df_analise[date_col].dt.year == ano)
             faturados_df = df_analise[filtro].copy()
