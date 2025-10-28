@@ -440,8 +440,8 @@ class CalculoComissao:
                     # ler CSV ou Excel conforme a extensão
                     try:
                         if analise_path.lower().endswith('.csv'):
-                            # tentar detectar delimitador automaticamente
-                            df_anal = pd.read_csv(analise_path, sep=None, engine='python', dtype=str)
+                            # tentar detectar delimitador automaticamente e remover BOM (utf-8-sig)
+                            df_anal = pd.read_csv(analise_path, sep=None, engine='python', dtype=str, encoding='utf-8-sig')
                         else:
                             # Excel: inferir se existe coluna 'Dt Emissão' para parse_dates
                             try:
@@ -454,10 +454,77 @@ class CalculoComissao:
                         self._log_validacao('AVISO', f'Falha ao ler {analise_path}: {e_read}', {'path': analise_path})
                         df_anal = pd.DataFrame()
 
-                    # Normalizar colunas e strings (trim)
+                    # Normalizar cabeçalhos (remover BOM, acentos e padronizar nomes esperados) e strings (trim)
                     if not df_anal.empty:
-                        df_anal.columns = df_anal.columns.str.strip()
-                        for c in df_anal.select_dtypes(include=['object']):
+                        import unicodedata
+
+                        def _norm_header(s: str) -> str:
+                            s2 = str(s).lstrip('\ufeff').strip()
+                            s2 = unicodedata.normalize('NFKD', s2).encode('ASCII', 'ignore').decode()
+                            s2 = ' '.join(s2.strip().lower().split())
+                            return s2
+
+                        # mapeamento de nomes normalizados -> canônicos usados no cálculo
+                        canonical = {
+                            'processo': 'Processo',
+                            'dt emissao': 'Dt Emissão',
+                            'data aceite': 'Data Aceite',
+                            'valor realizado': 'Valor Realizado',
+                            'valor orcado': 'Valor Orçado',
+                            'valor orcado.': 'Valor Orçado',
+                            'negocio': 'Negócio',
+                            'grupo': 'Grupo',
+                            'subgrupo': 'Subgrupo',
+                            'tipo de mercadoria': 'Tipo de Mercadoria',
+                            'consultor interno': 'Consultor Interno',
+                            'representante-pedido': 'Representante-pedido',
+                            'gerente comercial-pedido': 'Gerente Comercial-Pedido',
+                            'cliente': 'Cliente',
+                            'codigo produto': 'Código Produto',
+                            'descricao produto': 'Descrição Produto',
+                            'fabricante': 'Fabricante',
+                            'status processo': 'Status Processo',
+                            'operacao': 'Operação',
+                        }
+
+                        # construir renomeação de colunas
+                        rename_map = {}
+                        seen_targets = set()
+                        for col in list(df_anal.columns):
+                            norm = _norm_header(col)
+                            target = canonical.get(norm)
+                            if target is None:
+                                # ainda remover BOM e trim no cabeçalho original
+                                cleaned = str(col).lstrip('\ufeff').strip()
+                                if cleaned != col:
+                                    rename_map[col] = cleaned
+                                continue
+                            # evitar duplicar a mesma coluna alvo; mantém a primeira ocorrência
+                            if target in seen_targets:
+                                # postergamos; consolidaremos depois
+                                rename_map[col] = target
+                            else:
+                                rename_map[col] = target
+                                seen_targets.add(target)
+
+                        if rename_map:
+                            df_anal = df_anal.rename(columns=rename_map)
+
+                        # consolidar duplicatas após rename (bfill left-most)
+                        cols = list(df_anal.columns)
+                        groups = {}
+                        for c in cols:
+                            groups.setdefault(c, []).append(c)
+                        for tgt, group in groups.items():
+                            if len(group) > 1:
+                                s = df_anal[group].bfill(axis=1).iloc[:, 0]
+                                # drop all then reassign first
+                                df_anal.drop(columns=group, inplace=True)
+                                df_anal[tgt] = s
+
+                        # Normalizar valores de texto (trim)
+                        df_anal.columns = [str(c).strip() for c in df_anal.columns]
+                        for c in df_anal.select_dtypes(include=['object']).columns:
                             df_anal[c] = df_anal[c].astype(str).str.strip()
 
                     self.data['ANALISE_COMERCIAL_COMPLETA'] = df_anal
@@ -482,6 +549,14 @@ class CalculoComissao:
 
             params_df = self.data['PARAMS']
             self.params = pd.Series(params_df.valor.values, index=params_df.chave).to_dict()
+            # Override mes/ano de apuração com a escolha interativa do usuário, quando disponível
+            try:
+                if hasattr(self, 'params_override') and isinstance(self.params_override, dict):
+                    for k in ('mes_apuracao', 'ano_apuracao'):
+                        if k in self.params_override and self.params_override[k] is not None:
+                            self.params[k] = self.params_override[k]
+            except Exception:
+                pass
             # parâmetro para escolha default em execuções não interativas
             self.params['cross_selling_default_option'] = str(self.params.get('cross_selling_default_option', 'A')).upper()
             param_base_path = self.params.get('base_path')
@@ -793,18 +868,70 @@ class CalculoComissao:
                             'detalhe': 'METAS_FORNECEDORES vazia para esta linha'
                         })
 
-                # Determinar mês de apuração a partir de 'Dt Emissão' do item_faturado, se disponível
+                # Determinar mês/ano de apuração
+                # 1) Preferir parâmetros globais (definidos a partir da entrada do usuário)
+                raw_mes = self.params.get('mes_apuracao') if isinstance(self.params, dict) else None
+                raw_ano = self.params.get('ano_apuracao') if isinstance(self.params, dict) else None
                 mes_apuracao = None
-                dt_emissao = item_faturado.get('Dt Emissão') if 'Dt Emissão' in item_faturado.index else None
-                if pd.notna(dt_emissao):
-                    try:
-                        mes_apuracao = pd.to_datetime(dt_emissao).month
-                    except Exception:
-                        mes_apuracao = None
+                ano_apuracao = None
 
-                # Se não encontrarmos mês, usamos mês atual
+                try:
+                    if raw_mes is not None:
+                        mes_apuracao = int(str(raw_mes).strip())
+                    if raw_ano is not None:
+                        ano_apuracao = int(str(raw_ano).strip())
+                except Exception:
+                    mes_apuracao = None
+                    ano_apuracao = None
+
+                # 2) Se ainda não houver mês, inferir do 'Dt Emissão' do item
                 if mes_apuracao is None:
-                    mes_apuracao = datetime.now().month
+                    dt_emissao = item_faturado.get('Dt Emissão') if 'Dt Emissão' in item_faturado.index else None
+                    if pd.notna(dt_emissao):
+                        try:
+                            mes_apuracao = int(pd.to_datetime(dt_emissao).month)
+                            if ano_apuracao is None:
+                                ano_apuracao = int(pd.to_datetime(dt_emissao).year)
+                        except Exception:
+                            mes_apuracao = None
+
+                # 3) Se ainda indefinido, tentar inferir a partir de FATURADOS_YTD do fornecedor
+                if mes_apuracao is None or ano_apuracao is None:
+                    try:
+                        faturados_ytd_infer = self.data.get('FATURADOS_YTD', pd.DataFrame())
+                        if isinstance(faturados_ytd_infer, pd.DataFrame) and not faturados_ytd_infer.empty:
+                            # localizar colunas possíveis de data
+                            col_dt = 'Dt Emissão'
+                            if col_dt not in faturados_ytd_infer.columns:
+                                for c in faturados_ytd_infer.columns:
+                                    if 'emiss' in str(c).lower():
+                                        col_dt = c
+                                        break
+                            if col_dt in faturados_ytd_infer.columns and 'Fabricante' in faturados_ytd_infer.columns:
+                                tmp = faturados_ytd_infer[faturados_ytd_infer['Fabricante'] == fornecedor_nome].copy()
+                                if not tmp.empty:
+                                    # garantir datetime
+                                    try:
+                                        tmp[col_dt] = pd.to_datetime(tmp[col_dt], errors='coerce')
+                                    except Exception:
+                                        pass
+                                    tmp = tmp[tmp[col_dt].notna()]
+                                    if not tmp.empty:
+                                        # usar o mês/ano máximo disponível para esse fornecedor (compatível com YTD)
+                                        dtmax = tmp[col_dt].max()
+                                        if pd.notna(dtmax):
+                                            if mes_apuracao is None:
+                                                mes_apuracao = int(dtmax.month)
+                                            if ano_apuracao is None:
+                                                ano_apuracao = int(dtmax.year)
+                    except Exception:
+                        pass
+
+                # 4) Fallback final: mês/ano atual
+                if mes_apuracao is None:
+                    mes_apuracao = int(datetime.now().month)
+                if ano_apuracao is None:
+                    ano_apuracao = int(datetime.now().year)
 
                 # Preparar lista de moedas necessárias para busca de câmbio
                 moedas_necessarias = set()
@@ -813,9 +940,9 @@ class CalculoComissao:
                     if moeda:
                         moedas_necessarias.add(moeda)
 
-                # Buscar taxas de câmbio para o ano corrente
-                ano_corrente = pd.to_datetime(item_faturado.get('Dt Emissão', datetime.now())).year
-                taxas = self._get_taxas_de_cambio(ano_corrente, mes_apuracao, list(moedas_necessarias)) if moedas_necessarias else {}
+                # Buscar taxas de câmbio para o ano/mês de apuração (incluir mês informado pelo usuário)
+                ano_corrente = int(ano_apuracao)
+                taxas = self._get_taxas_de_cambio(ano_corrente, int(mes_apuracao), list(moedas_necessarias)) if moedas_necessarias else {}
 
                 # Para cada fornecedor (até 2), calculamos o componente
                 for idx, fornecedor in enumerate(fornecedores[:2], start=1):
@@ -845,8 +972,16 @@ class CalculoComissao:
                     if faturados_ytd.empty:
                         faturamento_realizado_ytd = 0.0
                     else:
-                        filt = (faturados_ytd['Fabricante'] == fornecedor_nome)
+                        fornecedor_key = str(fornecedor_nome).strip().upper() if fornecedor_nome is not None else ''
+                        fab_series = faturados_ytd['Fabricante'].astype(str).str.strip().str.upper()
+                        filt = (fab_series == fornecedor_key)
                         vendas_fornecedor = faturados_ytd[filt].copy()
+                        if 'Valor Realizado' in vendas_fornecedor.columns:
+                            vendas_fornecedor['Valor Realizado'] = pd.to_numeric(
+                                vendas_fornecedor['Valor Realizado'], errors='coerce'
+                            ).fillna(0.0)
+                        else:
+                            vendas_fornecedor['Valor Realizado'] = 0.0
                         if 'Dt Emissão' in vendas_fornecedor.columns:
                             vendas_fornecedor['mes'] = vendas_fornecedor['Dt Emissão'].dt.month
                         else:
@@ -927,6 +1062,10 @@ class CalculoComissao:
                                     filt_disk['mes'] = pd.to_datetime(filt_disk[dt_col_local], errors='coerce').dt.month
                                 else:
                                     filt_disk['mes'] = mes_apuracao
+                                if val_col in filt_disk.columns:
+                                    filt_disk[val_col] = pd.to_numeric(
+                                        filt_disk[val_col], errors='coerce'
+                                    ).fillna(0.0)
                                 for m in range(1, int(mes_apuracao) + 1):
                                     soma_brl = filt_disk[filt_disk['mes'] == m][val_col].sum() if not filt_disk.empty else 0.0
                                     taxa_m = None
@@ -3438,6 +3577,11 @@ if __name__ == '__main__':
                 _info(f"Aviso: não foi encontrado arquivo de rentabilidade agrupada para {mm}/{ano} na pasta 'rentabilidades'. Procurados: {candidato}")
 
         calculadora = CalculoComissao()
+        try:
+            # Injetar mês/ano de apuração escolhidos pelo usuário para uso consistente no cálculo
+            calculadora.params_override = {'mes_apuracao': int(mes), 'ano_apuracao': int(ano)}
+        except Exception:
+            calculadora.params_override = {'mes_apuracao': mes, 'ano_apuracao': ano}
         calculadora.executar()
     except Exception as e:
         print(f"\nOcorreu um erro fatal durante a execução: {e}")
