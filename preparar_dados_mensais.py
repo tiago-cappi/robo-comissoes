@@ -3,6 +3,28 @@ import os
 import sys
 import unicodedata
 
+# --- FUNÇÕES AUXILIARES ---
+def _parse_dates_smart(series):
+    """
+    Parse dates intelligently, detecting ISO format (YYYY-MM-DD) automatically.
+    Falls back to day-first or month-first parsing for ambiguous formats.
+    """
+    raw = series.astype(str).str.strip().replace({'nan': ''})
+    raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
+    
+    # Check if most values match ISO format pattern (YYYY-MM-DD)
+    iso_pattern = r'^\d{4}-\d{2}-\d{2}'
+    iso_count = raw_clean.str.match(iso_pattern, na=False).sum()
+    
+    # If >= 50% are ISO format, use yearfirst=True
+    if iso_count >= max(1, int(0.5 * len(raw_clean))):
+        return pd.to_datetime(raw_clean, yearfirst=True, errors='coerce')
+    else:
+        # Try both dayfirst and monthfirst, choose the one with fewer NaT
+        parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
+        parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
+        return parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
+
 # --- CONFIGURAÇÕES ---
 ARQUIVO_ANALISE_COMPLETA = 'Analise_Comercial_Completa.csv'
 ARQUIVO_SAIDA_FATURADOS = 'Faturados.xlsx'
@@ -29,6 +51,18 @@ DEFAULT_YTD_WANTED = [
     'Valor Realizado', 'Consultor Interno', 'Representante-pedido',
     'Tipo de Mercadoria', 'Subgrupo', 'Grupo', 'Negócio', 'Fabricante'
 ]
+
+# Auto-conversão: suportar .xlsx e .csv
+# Se existir .xlsx e não existir .csv, converte automaticamente
+if os.path.exists('Analise_Comercial_Completa.xlsx') and not os.path.exists(ARQUIVO_ANALISE_COMPLETA):
+    try:
+        print("Detectado Analise_Comercial_Completa.xlsx - convertendo para .csv...")
+        df_temp = pd.read_excel('Analise_Comercial_Completa.xlsx', dtype=str)
+        df_temp.to_csv(ARQUIVO_ANALISE_COMPLETA, index=False, encoding='utf-8-sig')
+        print(f"[OK] Conversao concluida: {ARQUIVO_ANALISE_COMPLETA} criado.")
+    except Exception as e:
+        print(f"AVISO: Falha ao converter .xlsx para .csv: {e}")
+        print("Tentarei usar o arquivo .xlsx diretamente se possivel.")
 
 def obter_mes_ano():
     """Solicita ao usuário o mês e o ano para apuração."""
@@ -109,23 +143,8 @@ def gerar_faturados(df, mes, ano):
             return False
 
     print(f"[DEBUG Faturados] Coluna de data detectada: '{date_col}'")
-    raw = df[date_col].astype(str).str.strip().replace({'nan': ''})
-    raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
-    print(f"[DEBUG Faturados] Amostra Dt Emissão (bruto): {raw.head(5).tolist()}")
-    # Detect ISO-like (year-first) formats and prefer yearfirst parsing when prevalent
-    try:
-        iso_like = raw_clean.str.match(r'^\s*\d{4}[-/]')
-        iso_count = int(iso_like.fillna(False).sum())
-        print(f"[DEBUG Faturados] Linhas com padrão ano-primeiro (YYYY-...): {iso_count} de {len(raw_clean)}")
-    except Exception:
-        iso_count = 0
-    if iso_count >= max(1, int(0.5 * len(raw_clean))):
-        parsed = pd.to_datetime(raw_clean, yearfirst=True, errors='coerce')
-    else:
-        parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
-        parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
-        parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
-    df[date_col] = parsed
+    print(f"[DEBUG Faturados] Amostra Dt Emissão (bruto): {df[date_col].astype(str).head(5).tolist()}")
+    df[date_col] = _parse_dates_smart(df[date_col])
     print(f"[DEBUG Faturados] Tipo após parse: {df[date_col].dtype}, válidas: {int(df[date_col].notna().sum())} de {len(df)}")
     try:
         amostra = df[date_col].dropna().astype(str).head(5).tolist()
@@ -248,14 +267,9 @@ def gerar_conversoes(df, mes, ano):
             print(f"ERRO: falha ao salvar '{arquivo_saida}': {e}")
             return False
 
-    raw = df[data_aceite_col].astype(str).str.strip().replace({'nan': ''})
-    raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
-    parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
-    parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
-    parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
-    df[data_aceite_col] = parsed
+    df[data_aceite_col] = _parse_dates_smart(df[data_aceite_col])
 
-    n_invalid = parsed.isna().sum()
+    n_invalid = df[data_aceite_col].isna().sum()
     if n_invalid > 0:
         print(f"AVISO: {n_invalid} linhas com 'Data Aceite' inválida; essas linhas serão ignoradas.")
 
@@ -484,23 +498,7 @@ def prepare_dataframes_for_month(mes: int, ano: int):
                 break
         faturados_df = pd.DataFrame()
         if date_col is not None:
-            raw = df_analise[date_col].astype(str).str.strip().replace({'nan': ''})
-            raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
-            # Prefer year-first when the majority of rows match ISO-like pattern
-            try:
-                iso_like = raw_clean.str.match(r'^\s*\d{4}[-/]')
-                iso_count = int(iso_like.fillna(False).sum())
-            except Exception:
-                iso_count = 0
-            if iso_count >= max(1, int(0.5 * len(raw_clean))):
-                parsed = pd.to_datetime(raw_clean, yearfirst=True, errors='coerce')
-            else:
-                parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
-                parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
-                parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
-                if parsed.isna().all():
-                    parsed = parsed1
-            df_analise[date_col] = parsed
+            df_analise[date_col] = _parse_dates_smart(df_analise[date_col])
             filtro = (df_analise[date_col].dt.month == mes) & (df_analise[date_col].dt.year == ano)
             faturados_df = df_analise[filtro].copy()
         # attempt to normalize column names similar to gerar_faturados
@@ -536,14 +534,7 @@ def prepare_dataframes_for_month(mes: int, ano: int):
                 break
         conversoes_df = pd.DataFrame()
         if data_aceite_col is not None:
-            raw = df_analise[data_aceite_col].astype(str).str.strip().replace({'nan': ''})
-            raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
-            parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
-            parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
-            parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
-            if parsed.isna().all():
-                parsed = parsed1
-            df_analise[data_aceite_col] = parsed
+            df_analise[data_aceite_col] = _parse_dates_smart(df_analise[data_aceite_col])
             filtro = (df_analise[data_aceite_col].dt.month == mes) & (df_analise[data_aceite_col].dt.year == ano)
             conversoes_df = df_analise[filtro].copy()
         base_cols = [
@@ -580,14 +571,7 @@ def prepare_dataframes_for_month(mes: int, ano: int):
                 break
         faturados_ytd_df = pd.DataFrame()
         if date_col is not None:
-            raw = df_analise[date_col].astype(str).str.strip().replace({'nan': ''})
-            raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
-            parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
-            parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
-            parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
-            if parsed.isna().all():
-                parsed = parsed1
-            df_analise[date_col] = parsed
+            df_analise[date_col] = _parse_dates_smart(df_analise[date_col])
             from datetime import datetime
             import calendar
             start = datetime(ano, 1, 1)
@@ -625,13 +609,9 @@ def prepare_dataframes_for_month(mes: int, ano: int):
     except Exception:
         faturados_ytd_df = pd.DataFrame()
 
-    # Retencao_Clientes (light implementation: try to find columns linha/clientes_mes_anterior/clientes_mes_atual)
+    # Retencao_Clientes - calcular usando a mesma lógica de gerar_retencao_clientes
     try:
-        retencao_df = pd.DataFrame()
-        # look for likely columns
-        candidates = [c for c in df_analise.columns if 'linha' in _norm(c) or 'cliente' in _norm(c)]
-        # fallback: produce an empty frame with expected columns
-        retencao_df = pd.DataFrame(columns=['linha', 'clientes_mes_anterior', 'clientes_mes_atual'])
+        retencao_df = _calcular_retencao_para_mes(df_analise, mes, ano)
     except Exception:
         retencao_df = pd.DataFrame(columns=['linha', 'clientes_mes_anterior', 'clientes_mes_atual'])
 
@@ -661,12 +641,7 @@ def gerar_faturados_ytd(df, mes, ano):
             return False
 
     # Parse dates robustly
-    raw = df[date_col].astype(str).str.strip().replace({'nan': ''})
-    raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
-    parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
-    parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
-    parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
-    df[date_col] = parsed
+    df[date_col] = _parse_dates_smart(df[date_col])
 
     # Compute YTD window: from Jan 1 of year to last day of selected month/year
     from datetime import datetime
@@ -758,6 +733,119 @@ def gerar_faturados_ytd(df, mes, ano):
         return False
 
 
+def _calcular_retencao_para_mes(df, mes, ano):
+    """Calcula dados de retenção de clientes por linha (negócio) para um mês específico.
+    
+    Retorna um DataFrame com colunas: linha, clientes_mes_anterior, clientes_mes_atual
+    Usa a mesma lógica de gerar_retencao_clientes mas sem salvar em arquivo.
+    """
+    from datetime import datetime
+    import calendar
+    
+    # operations allowed
+    allowed_ops = set([
+        _norm('PSEM - PEDIDO DE VENDA/REV. MANUT. E SERVIÇO'),
+        _norm('PSER - PEDIDO SERVIÇO'),
+        _norm('PVMA - PEDIDO DE VENDA MANUTENÇÃO'),
+        _norm('FLOC - FATURA DE LOCAÇÃO EQUIPAMENTOS'),
+        _norm('IMO2 - VENDA IMOBILIZADO'),
+        _norm('OR19 - VENDA A ORDEM POR CONTA DE TERCEIRO'),
+        _norm('P205 - SIMPLES FATURAMENTO'),
+        _norm('PVEN - PEDIDO DE VENDA')
+    ])
+    
+    # find date column
+    date_col = None
+    for c in df.columns:
+        if _norm(c) == _norm('Dt Emissão') or ('dt' in _norm(c) and 'emiss' in _norm(c)):
+            date_col = c
+            break
+    if date_col is None:
+        return pd.DataFrame(columns=['linha', 'clientes_mes_anterior', 'clientes_mes_atual'])
+    
+    # Parse dates
+    df = df.copy()
+    df[date_col] = _parse_dates_smart(df[date_col])
+    
+    # Find columns
+    op_col = None
+    status_col = None
+    negocio_col = None
+    cliente_col = None
+    for c in df.columns:
+        nc = _norm(c)
+        if nc == 'operacao':
+            op_col = c
+        if nc == _norm('Status Processo'):
+            status_col = c
+        if nc == _norm('Negócio') or nc == 'negocio':
+            negocio_col = c
+        if nc == _norm('Cliente'):
+            cliente_col = c
+    
+    if negocio_col is None or cliente_col is None:
+        return pd.DataFrame(columns=['linha', 'clientes_mes_anterior', 'clientes_mes_atual'])
+    
+    # Compute windows
+    if mes == 1:
+        prev_month = 12
+        prev_year = ano - 1
+    else:
+        prev_month = mes - 1
+        prev_year = ano
+    
+    def window_end(year, month):
+        last_day = calendar.monthrange(year, month)[1]
+        return datetime(year, month, last_day, 23, 59, 59)
+    
+    def window_start_for_end(year, month):
+        ym_end_index = year*12 + (month-1)
+        ym_start_index = ym_end_index - 23
+        s_year = ym_start_index // 12
+        s_month = (ym_start_index % 12) + 1
+        return datetime(s_year, s_month, 1)
+    
+    end_prev = window_end(prev_year, prev_month)
+    start_prev = window_start_for_end(prev_year, prev_month)
+    end_curr = window_end(ano, mes)
+    start_curr = window_start_for_end(ano, mes)
+    
+    cutoff = start_prev
+    df_base = df[df[date_col].notna() & (df[date_col] >= cutoff)].copy()
+    
+    # Apply filters
+    if status_col:
+        df_base = df_base[df_base[status_col].astype(str).str.strip().str.upper() == 'FATURADO']
+    
+    if op_col:
+        df_base['_op_norm'] = df_base[op_col].astype(str).apply(_norm)
+        df_base = df_base[df_base['_op_norm'].apply(
+            lambda x: any(x in a or a.startswith(x) for a in allowed_ops if x)
+        )].copy()
+        df_base.drop(columns=['_op_norm'], inplace=True)
+    
+    # Compute distinct clients per negocio
+    mask_prev = (df_base[date_col] >= start_prev) & (df_base[date_col] <= end_prev)
+    mask_curr = (df_base[date_col] >= start_curr) & (df_base[date_col] <= end_curr)
+    
+    prev = df_base[mask_prev].groupby(negocio_col)[cliente_col].nunique()
+    curr = df_base[mask_curr].groupby(negocio_col)[cliente_col].nunique()
+    
+    negocios = sorted(set(prev.index.tolist()) | set(curr.index.tolist()))
+    rows = []
+    for n in negocios:
+        rows.append({
+            'linha': n,
+            'clientes_mes_anterior': int(prev.get(n, 0)),
+            'clientes_mes_atual': int(curr.get(n, 0))
+        })
+    
+    if rows:
+        return pd.DataFrame(rows).sort_values('linha')
+    else:
+        return pd.DataFrame(columns=['linha', 'clientes_mes_anterior', 'clientes_mes_atual'])
+
+
 def gerar_retencao_clientes(df, mes, ano):
     """Gera Retencao_Clientes.xlsx usando a lógica ajustada do SQL.
 
@@ -793,12 +881,7 @@ def gerar_retencao_clientes(df, mes, ano):
     if date_col is None:
         print("ERRO: coluna 'Dt Emissão' não encontrada para retenção.")
         return False
-    raw = df[date_col].astype(str).str.strip().replace({'nan': ''})
-    raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
-    parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
-    parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
-    parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
-    df[date_col] = parsed
+    df[date_col] = _parse_dates_smart(df[date_col])
 
     # find operation column and status column and negocio and cliente
     op_col = None
@@ -878,8 +961,13 @@ def gerar_retencao_clientes(df, mes, ano):
 
     if op_col:
         # normalize op text and check membership
+        # Valores no arquivo podem ser siglas curtas (ex: "PVEN") enquanto allowed_ops contém
+        # descrições completas (ex: "pven - pedido de venda"). Verificar se o valor está contido
+        # em alguma operação permitida OU se alguma operação permitida começa com o valor
         df_base['_op_norm'] = df_base[op_col].astype(str).apply(_norm)
-        df_base = df_base[df_base['_op_norm'].apply(lambda x: any(a in x for a in allowed_ops))].copy()
+        df_base = df_base[df_base['_op_norm'].apply(
+            lambda x: any(x in a or a.startswith(x) for a in allowed_ops if x)
+        )].copy()
         df_base.drop(columns=['_op_norm'], inplace=True)
     else:
         print('AVISO: coluna Operação não encontrada; pulando filtro por operação.')
@@ -902,7 +990,13 @@ def gerar_retencao_clientes(df, mes, ano):
             'clientes_mes_atual': int(curr.get(n, 0))
         })
 
-    df_out = pd.DataFrame(rows).sort_values('linha')
+    # Criar DataFrame garantindo que sempre tenha as colunas corretas
+    if rows:
+        df_out = pd.DataFrame(rows).sort_values('linha')
+    else:
+        # Se não houver dados, criar DataFrame vazio com colunas corretas
+        df_out = pd.DataFrame(columns=['linha', 'clientes_mes_anterior', 'clientes_mes_atual'])
+    
     try:
         # garantir que sempre geramos o arquivo mesmo que vazio
         df_out.to_excel(arquivo_saida, index=False)
@@ -1075,14 +1169,8 @@ def main():
         sys.exit(1)
 
     # Tentar parse em várias heurísticas e escolher a coluna/parse com menos nulos
-    raw = df_analise[date_col].astype(str).str.strip().replace({'nan': ''})
-    raw_clean = raw.str.replace('\u00a0', ' ', regex=False).str.replace('T', ' ', regex=False)
-    parsed1 = pd.to_datetime(raw_clean, dayfirst=True, errors='coerce')
-    parsed2 = pd.to_datetime(raw_clean, dayfirst=False, errors='coerce')
-    # escolher o que produz menos nulos
-    parsed = parsed1 if parsed1.isna().sum() <= parsed2.isna().sum() else parsed2
-    df_analise[date_col] = parsed
-    n_invalid = parsed.isna().sum()
+    df_analise[date_col] = _parse_dates_smart(df_analise[date_col])
+    n_invalid = df_analise[date_col].isna().sum()
     if n_invalid > 0:
         print(f"AVISO: {n_invalid} linhas com data inválida na coluna detectada '{date_col}' após tentativas de parse.")
 

@@ -268,8 +268,31 @@ def _normalize_text(s):
     if pd.isna(s):
         return ""
     s = str(s)
+    # Remover BOM (Byte Order Mark) se presente
+    s = s.replace('\ufeff', '')
     s = unicodedata.normalize("NFKD", s).encode("ASCII", "ignore").decode("ASCII")
     return " ".join(s.strip().upper().split())
+
+
+def _calcular_atingimento(realizado, meta):
+    """
+    Calcula atingimento com tratamento correto para meta zero.
+    - Se meta == 0 e realizado > 0: retorna 1.0 (superou a meta)
+    - Se meta == 0 e realizado == 0: retorna 0.0
+    - Se meta > 0: retorna realizado / meta
+    """
+    try:
+        realizado = float(realizado) if realizado is not None else 0.0
+        meta = float(meta) if meta is not None else 0.0
+        
+        if meta == 0:
+            # Meta zero: se realizou algo, atingiu 100%; se não, 0%
+            return 1.0 if realizado > 0 else 0.0
+        else:
+            # Meta positiva: calcula proporção normal
+            return realizado / meta
+    except Exception:
+        return 0.0
 
 
 try:
@@ -654,8 +677,13 @@ class CalculoComissao:
             return None
         return None
 
-    def _calcular_fc_para_item(self, nome_colab, cargo_colab, item_faturado):
-        """Calcula um FC único para um colaborador e um item faturado específico."""
+    def _calcular_fc_para_item(self, nome_colab, cargo_colab, item_faturado, mes_apuracao_override=None, ano_apuracao_override=None):
+        """Calcula um FC único para um colaborador e um item faturado específico.
+        
+        Args:
+            mes_apuracao_override: Mês de apuração a ser usado (útil para reconciliações)
+            ano_apuracao_override: Ano de apuração a ser usado (útil para reconciliações)
+        """
         pesos = self.data['PESOS_METAS'][self.data['PESOS_METAS']['cargo'] == cargo_colab]
         if pesos.empty:
             return 0, {}
@@ -684,11 +712,21 @@ class CalculoComissao:
                 continue
             
             if tipo_meta.endswith('_linha'):
-                realizado = self.realizado[realizado_key].get(item_context['linha'], 0)
+                chave_busca = item_context['linha']
+                realizado = self.realizado[realizado_key].get(chave_busca, 0)
+                # LOG DETALHADO durante reconciliação
+                if getattr(self, '_in_reconciliation', False):
+                    series_info = f"(índices disponíveis: {list(self.realizado[realizado_key].index)[:5]})" if isinstance(self.realizado[realizado_key], pd.Series) else "(not a series)"
+                    _info(f"[RECONC-DEBUG-FC] {tipo_meta}: buscando '{chave_busca}' em '{realizado_key}' {series_info} -> valor={realizado}")
             elif tipo_meta.endswith('_individual'):
-                realizado = self.realizado[realizado_key].get(nome_colab, 0)
+                chave_busca = nome_colab
+                realizado = self.realizado[realizado_key].get(chave_busca, 0)
+                if getattr(self, '_in_reconciliation', False):
+                    series_info = f"(índices disponíveis: {list(self.realizado[realizado_key].index)[:5]})" if isinstance(self.realizado[realizado_key], pd.Series) else "(not a series)"
+                    _info(f"[RECONC-DEBUG-FC] {tipo_meta}: buscando '{chave_busca}' em '{realizado_key}' {series_info} -> valor={realizado}")
             else: # rentabilidade
-                realizado = self.realizado[realizado_key].get(meta_chave, 0)
+                chave_busca = meta_chave
+                realizado = self.realizado[realizado_key].get(chave_busca, 0)
                 # garantir que realizado de rentabilidade esteja em decimal (ex: 0.12)
                 try:
                     if realizado is not None:
@@ -700,7 +738,7 @@ class CalculoComissao:
                     pass
 
             meta = self._get_meta(tipo_meta, meta_chave)
-            atingimento = (realizado / meta) if meta and meta > 0 else 0
+            atingimento = _calcular_atingimento(realizado, meta)
             
             cap_atingimento = float(self.params.get('cap_atingimento_max', 1.0))
             atingimento_cap = min(atingimento, cap_atingimento)
@@ -733,14 +771,8 @@ class CalculoComissao:
                     if not ret_row.empty:
                         clientes_ant = ret_row.iloc[0].get('clientes_mes_anterior', None)
                         clientes_atual = ret_row.iloc[0].get('clientes_mes_atual', None)
-                        # Tratamento: divisão por zero
-                        try:
-                            if clientes_ant is None or pd.isna(clientes_ant) or float(clientes_ant) == 0:
-                                taxa_retencao = 0.0
-                            else:
-                                taxa_retencao = float(clientes_atual) / float(clientes_ant)
-                        except Exception:
-                            taxa_retencao = 0.0
+                        # Calcular taxa de retenção com tratamento correto para meta zero
+                        taxa_retencao = _calcular_atingimento(clientes_atual, clientes_ant)
 
                         # Peso da meta para retenção (em % na tabela PESOS_METAS)
                         peso_ret = 0.0
@@ -793,18 +825,43 @@ class CalculoComissao:
                             'detalhe': 'METAS_FORNECEDORES vazia para esta linha'
                         })
 
-                # Determinar mês de apuração a partir de 'Dt Emissão' do item_faturado, se disponível
-                mes_apuracao = None
-                dt_emissao = item_faturado.get('Dt Emissão') if 'Dt Emissão' in item_faturado.index else None
-                if pd.notna(dt_emissao):
-                    try:
-                        mes_apuracao = pd.to_datetime(dt_emissao).month
-                    except Exception:
-                        mes_apuracao = None
+                # Determinar mês e ano de apuração
+                # Se foi passado override (ex: durante reconciliação), usar esses valores
+                if mes_apuracao_override is not None:
+                    mes_apuracao = mes_apuracao_override
+                else:
+                    # Tentar a partir de 'Dt Emissão' do item_faturado
+                    mes_apuracao = None
+                    dt_emissao = item_faturado.get('Dt Emissão') if 'Dt Emissão' in item_faturado.index else None
+                    if pd.notna(dt_emissao):
+                        try:
+                            # Verificar se já é datetime/Timestamp
+                            if isinstance(dt_emissao, (pd.Timestamp, datetime)):
+                                mes_apuracao = dt_emissao.month
+                            else:
+                                mes_apuracao = pd.to_datetime(dt_emissao).month
+                        except Exception:
+                            mes_apuracao = None
 
-                # Se não encontrarmos mês, usamos mês atual
-                if mes_apuracao is None:
-                    mes_apuracao = datetime.now().month
+                    # Se não encontrarmos mês, usamos mês atual
+                    if mes_apuracao is None:
+                        mes_apuracao = datetime.now().month
+
+                # Determinar ano de apuração
+                if ano_apuracao_override is not None:
+                    ano_corrente = ano_apuracao_override
+                else:
+                    dt_emissao = item_faturado.get('Dt Emissão') if 'Dt Emissão' in item_faturado.index else None
+                    if pd.notna(dt_emissao):
+                        try:
+                            if isinstance(dt_emissao, (pd.Timestamp, datetime)):
+                                ano_corrente = dt_emissao.year
+                            else:
+                                ano_corrente = pd.to_datetime(dt_emissao).year
+                        except Exception:
+                            ano_corrente = datetime.now().year
+                    else:
+                        ano_corrente = datetime.now().year
 
                 # Preparar lista de moedas necessárias para busca de câmbio
                 moedas_necessarias = set()
@@ -813,8 +870,7 @@ class CalculoComissao:
                     if moeda:
                         moedas_necessarias.add(moeda)
 
-                # Buscar taxas de câmbio para o ano corrente
-                ano_corrente = pd.to_datetime(item_faturado.get('Dt Emissão', datetime.now())).year
+                # Buscar taxas de câmbio
                 taxas = self._get_taxas_de_cambio(ano_corrente, mes_apuracao, list(moedas_necessarias)) if moedas_necessarias else {}
 
                 # Para cada fornecedor (até 2), calculamos o componente
@@ -877,11 +933,7 @@ class CalculoComissao:
                             faturamento_realizado_ytd += faturamento_convertido
 
                     # Cálculo do atingimento e componente
-                    try:
-                        atingimento = (faturamento_realizado_ytd / meta_ytd) if meta_ytd and meta_ytd > 0 else 0.0
-                    except Exception:
-                        atingimento = 0.0
-
+                    atingimento = _calcular_atingimento(faturamento_realizado_ytd, meta_ytd)
 
                     cap_atingimento = float(self.params.get('cap_atingimento_max', 1.0))
                     atingimento_cap = min(atingimento, cap_atingimento)
@@ -944,10 +996,7 @@ class CalculoComissao:
                             self._log_validacao('AVISO', f'Valor de faturamento_realizado_ytd anômalo detectado para fornecedor {fornecedor_nome} (orig={faturamento_realizado_ytd}, recomputed={safe_total}). Substituindo pelo valor recomputado.', {'fornecedor': fornecedor_nome, 'orig': faturamento_realizado_ytd, 'recomputed': safe_total})
                             faturamento_realizado_ytd = safe_total
                             # recompute atingimento and component after replacement
-                            try:
-                                atingimento = (faturamento_realizado_ytd / meta_ytd) if meta_ytd and meta_ytd > 0 else 0.0
-                            except Exception:
-                                atingimento = 0.0
+                            atingimento = _calcular_atingimento(faturamento_realizado_ytd, meta_ytd)
                             atingimento_cap = min(atingimento, cap_atingimento)
                             componente_fc_forn = atingimento_cap * peso_fornecedor
                     except Exception:
@@ -1390,9 +1439,25 @@ class CalculoComissao:
             # Após processar todos os recebimentos, atualizar STATUS_PROCESSO_ANALISE
             try:
                 df_analise = self.data.get('ANALISE_COMERCIAL_COMPLETA', pd.DataFrame())
-                if not df_analise.empty and 'Processo' in df_analise.columns and 'Status Processo' in df_analise.columns:
+                
+                # Buscar colunas com case-insensitive e remoção de BOM
+                def _find_col(df, target_names):
+                    """Busca coluna por lista de nomes (case-insensitive, remove BOM)"""
+                    if df is None or df.empty:
+                        return None
+                    for col in df.columns:
+                        col_clean = str(col).strip().lower().replace('\ufeff', '').replace(' ', '')
+                        for tname in target_names:
+                            if col_clean == tname:
+                                return col
+                    return None
+                
+                proc_col = _find_col(df_analise, ['processo'])
+                status_col = _find_col(df_analise, ['statusprocesso'])
+                
+                if not df_analise.empty and proc_col is not None and status_col is not None:
                     # construir mapa processo -> status (string)
-                    mapa_status = df_analise.set_index(df_analise['Processo'].astype(str).str.strip())['Status Processo'].to_dict()
+                    mapa_status = df_analise.set_index(df_analise[proc_col].astype(str).str.strip())[status_col].to_dict()
                 else:
                     mapa_status = {}
             except Exception:
@@ -1502,30 +1567,51 @@ class CalculoComissao:
                         except Exception:
                             return str(v).strip()
 
+                    # Busca case-insensitive pela coluna de Processo (remove BOM se presente)
+                    proc_col = None
+                    for col in df_map_local.columns:
+                        col_clean = str(col).strip().lower().replace('\ufeff', '').replace(' ', '')
+                        if col_clean == 'processo':
+                            proc_col = col
+                            break
+                    
+                    if proc_col is None:
+                        if getattr(self, '_logger', None):
+                            try:
+                                self._logger.info(f"[Receb] Coluna 'Processo' não encontrada em {map_source}. Colunas disponíveis: {list(df_map_local.columns)}")
+                            except Exception:
+                                pass
+                        return None, None
+
                     proc_s = _norm_proc(proc_val)
                     # 1) exact match (normalizado)
-                    if 'Processo' in df_map_local.columns:
-                        map_proc_norm = df_map_local['Processo'].apply(_norm_proc)
-                        exact_idx = map_proc_norm == proc_s
-                        if exact_idx.any():
-                            return df_map_local[exact_idx].iloc[0], 'exact_map'
+                    map_proc_norm = df_map_local[proc_col].apply(_norm_proc)
+                    exact_idx = map_proc_norm == proc_s
+                    if exact_idx.any():
+                        return df_map_local[exact_idx].iloc[0], 'exact_map'
 
                     # 2) substring match (normalizado)
-                    if 'Processo' in df_map_local.columns:
-                        map_proc_norm = df_map_local['Processo'].apply(_norm_proc)
-                        mask_sub = map_proc_norm.apply(lambda x: (x in proc_s) or (proc_s in x))
-                        cand = df_map_local[mask_sub]
-                        if not cand.empty:
-                            # choose candidate closest by amount when possible
-                            if 'Valor Realizado' in cand.columns and valor_val is not None:
-                                cand = cand.copy()
-                                try:
-                                    cand['diff'] = cand['Valor Realizado'].apply(lambda x: abs((float(x) if pd.notna(x) else 0.0) - float(valor_val)))
-                                    cand_sorted = cand.sort_values('diff')
-                                    return cand_sorted.iloc[0], 'substring_amount_best'
-                                except Exception:
-                                    pass
-                            return cand.iloc[0], 'substring_first'
+                    mask_sub = map_proc_norm.apply(lambda x: (x in proc_s) or (proc_s in x))
+                    cand = df_map_local[mask_sub]
+                    if not cand.empty:
+                        # Busca case-insensitive pela coluna Valor Realizado (remove BOM)
+                        valor_col = None
+                        for col in cand.columns:
+                            col_clean = str(col).strip().lower().replace('\ufeff', '').replace(' ', '')
+                            if col_clean == 'valorrealizado':
+                                valor_col = col
+                                break
+                        
+                        # choose candidate closest by amount when possible
+                        if valor_col is not None and valor_val is not None:
+                            cand = cand.copy()
+                            try:
+                                cand['diff'] = cand[valor_col].apply(lambda x: abs((float(x) if pd.notna(x) else 0.0) - float(valor_val)))
+                                cand_sorted = cand.sort_values('diff')
+                                return cand_sorted.iloc[0], 'substring_amount_best'
+                            except Exception:
+                                pass
+                        return cand.iloc[0], 'substring_first'
 
                     # 3) no match
                     if getattr(self, '_logger', None):
@@ -1589,19 +1675,43 @@ class CalculoComissao:
                     total_matched += 1
                     primeira = match_row
                     if getattr(self, '_logger', None):
-                        self._logger.info(f"Processo {proc} mapeado via {why} para processo faturado {primeira.get('Processo')}")
+                        proc_value = None
+                        for col in primeira.index:
+                            if str(col).strip().lower() == 'processo':
+                                proc_value = primeira.get(col)
+                                break
+                        self._logger.info(f"Processo {proc} mapeado via {why} para processo faturado {proc_value}")
+                    
+                    # Busca case-insensitive das colunas de contexto
+                    def _get_col_value(row, target_names):
+                        """Busca valor de coluna com case-insensitive (remove BOM e normaliza acentos)"""
+                        for col in row.index:
+                            col_norm = str(col).strip().lower().replace('\ufeff', '').replace(' ', '').replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ã', 'a').replace('õ', 'o')
+                            for tname in target_names:
+                                if col_norm == tname:
+                                    return row.get(col)
+                        return None
+                    
                     contexto = {
-                        'linha': primeira.get('Negócio'), 'grupo': primeira.get('Grupo'),
-                        'subgrupo': primeira.get('Subgrupo'), 'tipo_mercadoria': primeira.get('Tipo de Mercadoria')
+                        'linha': _get_col_value(primeira, ['negocio']),
+                        'grupo': _get_col_value(primeira, ['grupo']),
+                        'subgrupo': _get_col_value(primeira, ['subgrupo']),
+                        'tipo_mercadoria': _get_col_value(primeira, ['tipodemercadoria', 'tipomercadoria'])
                     }
 
                     # identificar colaboradores responsáveis (gestão e operacional) usando as mesmas regras de atribuições
                     df_atr = self.data.get('ATRIBUICOES', pd.DataFrame())
                     nomes_operacionais = []
-                    if pd.notna(primeira.get('Consultor Interno')):
-                        nomes_operacionais.append(primeira.get('Consultor Interno'))
-                    if pd.notna(primeira.get('Representante-pedido')):
-                        nomes_operacionais.append(primeira.get('Representante-pedido'))
+                    
+                    # Busca case-insensitive para Consultor Interno
+                    consultor_value = _get_col_value(primeira, ['consultorinterno', 'consultor'])
+                    if pd.notna(consultor_value):
+                        nomes_operacionais.append(consultor_value)
+                    
+                    # Busca case-insensitive para Representante-pedido
+                    repres_value = _get_col_value(primeira, ['representante-pedido', 'representantepedido', 'representante'])
+                    if pd.notna(repres_value):
+                        nomes_operacionais.append(repres_value)
 
                     cargos_gestao = df_colabs[df_colabs['tipo_cargo'] == 'Gestão']['cargo'].unique() if not df_colabs.empty else []
                     df_atribuicoes_gestao = df_atr[df_atr['cargo'].isin(cargos_gestao)] if not df_atr.empty else pd.DataFrame()
@@ -1621,7 +1731,13 @@ class CalculoComissao:
                     ]).drop_duplicates().reset_index(drop=True)
 
                     # Filtrar SOMENTE para colaboradores que recebem por recebimento
-                    colaboradores_receb = [c for c in colaboradores_para_comissionar['colaborador'].tolist() if c in self.recebe_por_recebimento]
+                    # Usar comparação normalizada (case-insensitive, trim whitespace)
+                    recebe_set_norm = {str(n).strip().upper() for n in self.recebe_por_recebimento}
+                    colaboradores_receb = []
+                    for c in colaboradores_para_comissionar['colaborador'].tolist():
+                        if str(c).strip().upper() in recebe_set_norm:
+                            colaboradores_receb.append(c)
+                    
                     if getattr(self, '_logger', None):
                         self._logger.info(f"Processo {proc}: colaboradores para recebimento identificados: {colaboradores_receb}")
                     if not colaboradores_receb:
@@ -1847,6 +1963,7 @@ class CalculoComissao:
         if proc_col is None:
             _debug(f"    [Reconc-Erro] Coluna 'processo' não encontrada para localizar {proc_id}.")
             return [], 0.0
+        
         df_itens_processo = df_analise[df_analise[proc_col].astype(str).str.strip() == proc_str].copy()
         if df_itens_processo.empty:
             try:
@@ -1862,7 +1979,25 @@ class CalculoComissao:
         if data_col is None:
             _debug(f"    [Reconc-Erro] Não foi possível identificar a coluna de data de emissão para {proc_id}.")
             return [], 0.0
-        data_emissao = pd.to_datetime(df_itens_processo[data_col].iloc[0], dayfirst=True, errors='coerce')
+        
+        # Parse data com detecção de timestamp em nanosegundos
+        data_valor = df_itens_processo[data_col].iloc[0]
+        
+        try:
+            data_str = str(data_valor).strip()
+            
+            # Detectar timestamp em nanosegundos (número muito grande convertido para string)
+            if data_str.isdigit() and len(data_str) > 10:
+                data_emissao = pd.to_datetime(int(data_str), unit='ns')
+            else:
+                # Parse normal
+                if data_str and len(data_str) >= 4 and data_str[:4].isdigit():
+                    data_emissao = pd.to_datetime(data_str, yearfirst=True, errors='coerce')
+                else:
+                    data_emissao = pd.to_datetime(data_str, dayfirst=True, errors='coerce')
+        except Exception:
+            data_emissao = pd.NaT
+        
         if pd.isna(data_emissao):
             _debug(f"    [Reconc-Erro] Não foi possível ler Dt Emissão para {proc_id}.")
             return [], 0.0
@@ -1876,6 +2011,16 @@ class CalculoComissao:
                 df_fat_hist, df_conv_hist, df_fat_ytd_hist, df_ret_hist = preparar_dados_mensais.prepare_dataframes_for_month(mes_fat, ano_fat, data_path=self.base_path)
             except TypeError:
                 df_fat_hist, df_conv_hist, df_fat_ytd_hist, df_ret_hist = preparar_dados_mensais.prepare_dataframes_for_month(mes_fat, ano_fat)
+            
+            # LOG DETALHADO
+            _info(f"[RECONC-DEBUG] Dados históricos carregados para {mes_fat:02d}/{ano_fat}:")
+            _info(f"  df_fat_hist: {len(df_fat_hist) if isinstance(df_fat_hist, pd.DataFrame) else 'NOT_DF'} linhas")
+            if isinstance(df_fat_hist, pd.DataFrame) and not df_fat_hist.empty:
+                _info(f"    Colunas: {df_fat_hist.columns.tolist()}")
+            _info(f"  df_conv_hist: {len(df_conv_hist) if isinstance(df_conv_hist, pd.DataFrame) else 'NOT_DF'} linhas")
+            if isinstance(df_conv_hist, pd.DataFrame) and not df_conv_hist.empty:
+                _info(f"    Colunas: {df_conv_hist.columns.tolist()}")
+                
         except Exception as e:
             _debug(f"    [Reconc-Erro] Falha ao carregar dados históricos via preparar_dados_mensais para {mes_fat:02d}/{ano_fat}: {e}")
             return [], 0.0
@@ -1912,6 +2057,11 @@ class CalculoComissao:
         col_linha_conv = _match_column(df_conv_hist, ['negocio', 'negócio', 'linha'])
         col_consultor_conv = _match_column(df_conv_hist, ['consultor interno', 'consultor'])
 
+        # LOG DETALHADO - Mapeamento de colunas
+        _info(f"[RECONC-DEBUG] Mapeamento de colunas:")
+        _info(f"  FATURAMENTO: valor={repr(col_valor_fat)}, linha={repr(col_linha_fat)}, consultor={repr(col_consultor_fat)}")
+        _info(f"  CONVERSÃO: valor={repr(col_valor_conv)}, linha={repr(col_linha_conv)}, consultor={repr(col_consultor_conv)}")
+
         realizados_hist = {
             'faturamento_linha': _build_group_series(df_fat_hist, col_linha_fat, col_valor_fat),
             'faturamento_individual': _build_group_series(df_fat_hist, col_consultor_fat, col_valor_fat),
@@ -1919,6 +2069,17 @@ class CalculoComissao:
             'conversao_individual': _build_group_series(df_conv_hist, col_consultor_conv, col_valor_conv),
             'rentabilidade': _build_rentabilidade_series(df_rentab_hist)
         }
+        
+        # LOG DETALHADO - Séries construídas
+        _info(f"[RECONC-DEBUG] Séries realizadas construídas:")
+        for key, series in realizados_hist.items():
+            if isinstance(series, pd.Series):
+                _info(f"  {key}: {len(series)} valores, tipo={type(series).__name__}")
+                if not series.empty:
+                    _info(f"    Índices: {series.index.tolist()[:5]}")
+                    _info(f"    Valores: {series.values.tolist()[:5]}")
+            else:
+                _info(f"  {key}: NOT A SERIES (tipo={type(series).__name__})")
         for key in ('faturamento_linha', 'faturamento_individual', 'conversao_linha', 'conversao_individual', 'rentabilidade'):
             if key not in realizados_hist or realizados_hist[key] is None:
                 realizados_hist[key] = pd.Series(dtype=float)
@@ -1979,6 +2140,8 @@ class CalculoComissao:
         # Aplicar os realizados históricos temporariamente para que o cálculo do FC
         # utilize os valores do mês do faturamento do processo.
         self.realizado = realizados_hist
+        # Marcar que estamos em reconciliação para ativar logs detalhados
+        self._in_reconciliation = True
         # Log mínimo para depurar por que nenhuma linha é gerada durante reconciliação
         try:
             if getattr(self, '_logger', None):
@@ -2055,13 +2218,16 @@ class CalculoComissao:
                 pass
             linhas_reconciliacao_detalhada = []
 
-            for _, item in df_itens_processo.iterrows():
+            for item_idx, item in df_itens_processo.iterrows():
                 contexto_item = {
                     'linha': item.get('Negócio'),
                     'grupo': item.get('Grupo'),
                     'subgrupo': item.get('Subgrupo'),
                     'tipo_mercadoria': item.get('Tipo de Mercadoria')
                 }
+                
+                # LOG DETALHADO - Contexto do item
+                _info(f"[RECONC-DEBUG] Item {item_idx}: linha='{contexto_item['linha']}', grupo='{contexto_item['grupo']}', subgrupo='{contexto_item['subgrupo']}', tipo='{contexto_item['tipo_mercadoria']}'")
 
                 linha_norm = _normalize_text(contexto_item['linha'])
                 grupo_norm = _normalize_text(contexto_item['grupo'])
@@ -2107,6 +2273,7 @@ class CalculoComissao:
                 combined['cargo'] = combined['cargo'].astype(str).str.strip()
                 combined['__norm_colaborador'] = combined['colaborador'].apply(_normalize_text)
                 combined = combined.drop_duplicates(subset=['__norm_colaborador', 'cargo']).reset_index(drop=True)
+                
                 combined = combined[combined['__norm_colaborador'].isin(recebe_set_norm)]
                 # Se, após filtrar pelos que recebem por recebimento, não houver candidatos,
                 # tentar trazer candidatos diretamente de df_colabs (fallback mínimo).
@@ -2114,11 +2281,6 @@ class CalculoComissao:
                 # Se não houver atribuídos (gestão/operacional) que também recebam por recebimento,
                 # então não há cálculo de reconciliação para este item.
                 if combined.empty:
-                    if getattr(self, '_logger', None):
-                        try:
-                            self._logger.info(f"[Reconc-Debug] Sem candidatos elegíveis por recebimento para item (proc={proc_str}). Pulando.")
-                        except Exception:
-                            pass
                     continue
 
                 processed = set()
@@ -2139,7 +2301,12 @@ class CalculoComissao:
                     comissao_base = faturamento_item * taxa_rateio * pe
 
                     try:
-                        fator_correcao_final, detalhes_fc_item = self._calcular_fc_para_item(colab_nome, colab_cargo, item)
+                        # Durante reconciliação, passar o mês/ano do faturamento do processo
+                        fator_correcao_final, detalhes_fc_item = self._calcular_fc_para_item(
+                            colab_nome, colab_cargo, item, 
+                            mes_apuracao_override=mes_fat,
+                            ano_apuracao_override=ano_fat
+                        )
                     except Exception as e:
                         _info(f"    [Reconc-Erro] Falha ao calcular FC para {colab_nome} no processo {proc_id}: {e}")
                         continue
@@ -2184,6 +2351,8 @@ class CalculoComissao:
             self.realizado = _prev_realizado
             self.data['RETENCAO_CLIENTES'] = df_rc
             self.data['FATURADOS_YTD'] = df_ytd
+            # Desmarcar flag de reconciliação
+            self._in_reconciliation = False
 
         comissao_correta_total = sum(_safe_float(row.get('comissao_calculada', 0.0)) for row in linhas_reconciliacao_detalhada)
         return linhas_reconciliacao_detalhada, comissao_correta_total
