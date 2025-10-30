@@ -1,0 +1,22 @@
+# Dependências do Frontend - Robô de Comissões
+# Compatível com Python 3.13
+
+# Framework principal
+streamlit>=1.39.0
+
+# Manipulação de dados (versões compatíveis com Python 3.13)
+pandas>=2.2.0
+openpyxl>=3.1.2
+xlrd>=2.0.1
+
+# Visualizações
+plotly>=5.18.0
+altair>=5.2.0
+
+# Utilitários
+python-dateutil>=2.8.2
+pytz>=2024.1
+
+# Validação e formatação
+pydantic>=2.9.0
+

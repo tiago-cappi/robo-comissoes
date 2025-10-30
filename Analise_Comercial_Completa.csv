@@ -1,9 +1,2 @@
 ﻿Processo,Dt Emissão,Data Aceite,Valor Realizado,Negócio,Grupo,Subgrupo,Tipo de Mercadoria,Consultor Interno,Código Produto,Descrição Produto,Representante-pedido,Status Processo,Operação,Valor Orçado,Fabricante,Gerente Comercial-Pedido,Cliente
-RET-Test,2023-08-15 00:00:00,2025-09-18 00:00:00,100,Remediação,Elevador de Liquidos Fixo,Auto Pump,Produto,DENER.MARTINS,QED-AP4-RET,Teste Retenção (Neimar),,FATURADO,PVEN,100,QED,,Cliente Teste1
-RET-Test,2023-08-15 00:00:00,2025-09-18 00:00:00,100,Remediação,Elevador de Liquidos Fixo,Auto Pump,Produto,DENER.MARTINS,QED-AP4-RET,Teste Retenção (Neimar),,FATURADO,PVEN,100,QED,,Cliente Teste2
-RET-Test,2023-08-15 00:00:00,2025-09-18 00:00:00,100,Remediação,Elevador de Liquidos Fixo,Auto Pump,Produto,DENER.MARTINS,QED-AP4-RET,Teste Retenção (Neimar),,FATURADO,PVEN,100,QED,,Cliente Teste3
-RET-Test,2023-09-15 00:00:00,2025-09-18 00:00:00,100,Remediação,Elevador de Liquidos Fixo,Auto Pump,Produto,DENER.MARTINS,QED-AP4-RET,Teste Retenção (Neimar),,FATURADO,PVEN,100,QED,,Cliente Teste1
-RET-Test,2023-09-15 00:00:00,2025-09-18 00:00:00,100,Remediação,Elevador de Liquidos Fixo,Auto Pump,Produto,DENER.MARTINS,QED-AP4-RET,Teste Retenção (Neimar),,FATURADO,PVEN,100,QED,,Cliente Teste2
-999999,2025-08-01 00:00:00,2025-09-18 00:00:00,50,Remediação,Elevador de Liquidos Fixo,Auto Pump,Produto,DENER.MARTINS,QED-AP4-RET,Teste Retenção (Neimar),,FATURADO,PVEN,100,QED,,Cliente Teste1
-999999,2025-08-01 00:00:00,2025-09-18 00:00:00,100,Remediação,Elevador de Liquidos Fixo,Auto Pump,Produto,DENER.MARTINS,QED-AP4-RET,Teste Retenção (Neimar),,FATURADO,PVEN,100,QED,,Cliente Teste2
-9999991,2025-09-01 00:00:00,2025-09-18 00:00:00,100,Remediação,Elevador de Liquidos Fixo,Auto Pump,Produto,DENER.MARTINS,QED-AP4-RET,Teste Retenção (Neimar),,FATURADO,PVEN,100,QED,,Cliente Teste2
+FC-Base3,2025-09-15 00:00:00,2025-09-15 00:00:00,100,SSO,Detector Portátil,MicroClip,Produto,ANDREY.ANDRADE,HON-MCXL-BASE,Base Teste FC,ANDRÉ LUIS GONCALVES CAMARGO,FATURADO,PVEN,0,HON,,Cliente Teste
