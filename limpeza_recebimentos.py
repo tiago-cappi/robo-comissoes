@@ -77,7 +77,7 @@ def limpar_dados_recebimento():
     if df_bruto.empty:
         print("AVISO: arquivo lido, mas sem linhas.")
         df_empty = pd.DataFrame(
-            columns=["PROCESSO", "DATA_RECEBIMENTO", "VALOR_RECEBIDO", "ID_CLIENTE"]
+            columns=["PROCESSO", "DATA_RECEBIMENTO", "VALOR_RECEBIDO", "ID_CLIENTE", "TIPO_PAGAMENTO", "FONTE_ORIGINAL"]
         )
         df_empty.to_excel(ARQUIVO_SAIDA_LIMPO, index=False, engine="openpyxl")
         print(f"Arquivo vazio salvo: '{ARQUIVO_SAIDA_LIMPO}'")
@@ -349,6 +349,8 @@ def limpar_dados_recebimento():
                 "DATA_RECEBIMENTO": data_receb,
                 "VALOR_RECEBIDO": float(valor),
                 "ID_CLIENTE": id_cliente_str,
+                "TIPO_PAGAMENTO": "Antecipação",
+                "FONTE_ORIGINAL": "Recebimentos",
             }
         )
 
@@ -357,7 +359,7 @@ def limpar_dados_recebimento():
             "\nAVISO: Nenhuma linha de recebimento válida foi encontrada no arquivo de entrada."
         )
         df_empty = pd.DataFrame(
-            columns=["PROCESSO", "DATA_RECEBIMENTO", "VALOR_RECEBIDO", "ID_CLIENTE"]
+            columns=["PROCESSO", "DATA_RECEBIMENTO", "VALOR_RECEBIDO", "ID_CLIENTE", "TIPO_PAGAMENTO", "FONTE_ORIGINAL"]
         )
         df_empty.to_excel(ARQUIVO_SAIDA_LIMPO, index=False, engine="openpyxl")
         print(f"Arquivo vazio salvo: '{ARQUIVO_SAIDA_LIMPO}'")

@@ -20,6 +20,8 @@ from utils.normalization import normalize_text, normalize_process_id
 ESTADO_COLUMNS = [
     'PROCESSO',
     'VALOR_TOTAL_PROCESSO',
+    'TOTAL_ANTECIPACOES',
+    'TOTAL_PAGAMENTOS_REGULARES',
     'TOTAL_PAGO_ACUMULADO',
     'TOTAL_ADIANTADO_COMISSAO',
     'STATUS_PAGAMENTO',
@@ -82,7 +84,7 @@ class ProcessStateManager:
         df = df[ESTADO_COLUMNS].copy()
         
         # Normalizar tipos numéricos
-        for num_col in ['TOTAL_PAGO_ACUMULADO', 'TOTAL_ADIANTADO_COMISSAO', 'VALOR_TOTAL_PROCESSO']:
+        for num_col in ['TOTAL_ANTECIPACOES', 'TOTAL_PAGAMENTOS_REGULARES', 'TOTAL_PAGO_ACUMULADO', 'TOTAL_ADIANTADO_COMISSAO', 'VALOR_TOTAL_PROCESSO']:
             df[num_col] = pd.to_numeric(df[num_col], errors='coerce').fillna(0.0)
         
         # Normalizar status (converter nan para None)
@@ -238,6 +240,134 @@ class ProcessStateManager:
             # Atualizar timestamp
             self.estado.at[idx, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
     
+    def update_payment_advanced(self, processo_id, valor_recebido: float,
+                                valor_total_processo: Optional[float] = None,
+                                status_pagamento: Optional[str] = None) -> None:
+        """
+        Atualiza TOTAL_ANTECIPACOES para um processo (antecipações).
+        
+        Se o processo não existir, cria nova entrada. Se existir, incrementa o valor.
+        
+        Args:
+            processo_id: ID do processo
+            valor_recebido: Valor da antecipação recebida
+            valor_total_processo: Valor total do processo (opcional)
+            status_pagamento: Status do pagamento (opcional)
+        """
+        proc_normalized = normalize_process_id(processo_id)
+        if proc_normalized is None:
+            return
+        
+        # Buscar índice do processo
+        mask = self.estado['PROCESSO'].astype(str).str.strip() == proc_normalized
+        indices = self.estado[mask].index
+        
+        if len(indices) == 0:
+            # Criar nova entrada
+            nova_linha = {
+                'PROCESSO': proc_normalized,
+                'VALOR_TOTAL_PROCESSO': valor_total_processo if valor_total_processo is not None else 0.0,
+                'TOTAL_ANTECIPACOES': float(valor_recebido),
+                'TOTAL_PAGAMENTOS_REGULARES': 0.0,
+                'TOTAL_PAGO_ACUMULADO': float(valor_recebido),
+                'TOTAL_ADIANTADO_COMISSAO': 0.0,
+                'STATUS_PAGAMENTO': status_pagamento,
+                'STATUS_RECONCILIACAO': 'Nao Realizada',
+                'STATUS_PROCESSO_ANALISE': None,
+                'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
+            }
+            self.estado = pd.concat([self.estado, pd.DataFrame([nova_linha])], ignore_index=True, sort=False)
+        else:
+            # Atualizar entrada existente
+            idx = indices[0]
+            
+            # Incrementar total antecipações
+            antecipacoes_anterior = pd.to_numeric(self.estado.at[idx, 'TOTAL_ANTECIPACOES'], errors='coerce')
+            antecipacoes_anterior = float(antecipacoes_anterior) if not pd.isna(antecipacoes_anterior) else 0.0
+            self.estado.at[idx, 'TOTAL_ANTECIPACOES'] = antecipacoes_anterior + float(valor_recebido)
+            
+            # Recalcular total pago acumulado
+            pagtos_regulares = pd.to_numeric(self.estado.at[idx, 'TOTAL_PAGAMENTOS_REGULARES'], errors='coerce')
+            pagtos_regulares = float(pagtos_regulares) if not pd.isna(pagtos_regulares) else 0.0
+            self.estado.at[idx, 'TOTAL_PAGO_ACUMULADO'] = antecipacoes_anterior + float(valor_recebido) + pagtos_regulares
+            
+            # Atualizar status de pagamento se fornecido
+            if status_pagamento is not None:
+                self.estado.at[idx, 'STATUS_PAGAMENTO'] = str(status_pagamento)
+            
+            # Atualizar valor total se fornecido e se estava vazio
+            if valor_total_processo is not None:
+                valor_atual = pd.to_numeric(self.estado.at[idx, 'VALOR_TOTAL_PROCESSO'], errors='coerce')
+                if pd.isna(valor_atual) or valor_atual == 0.0:
+                    self.estado.at[idx, 'VALOR_TOTAL_PROCESSO'] = float(valor_total_processo)
+            
+            # Atualizar timestamp
+            self.estado.at[idx, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
+    
+    def update_payment_regular(self, processo_id, valor_recebido: float,
+                               valor_total_processo: Optional[float] = None,
+                               status_pagamento: Optional[str] = None) -> None:
+        """
+        Atualiza TOTAL_PAGAMENTOS_REGULARES para um processo (pagamentos regulares).
+        
+        Se o processo não existir, cria nova entrada. Se existir, incrementa o valor.
+        
+        Args:
+            processo_id: ID do processo
+            valor_recebido: Valor do pagamento regular recebido
+            valor_total_processo: Valor total do processo (opcional)
+            status_pagamento: Status do pagamento (opcional)
+        """
+        proc_normalized = normalize_process_id(processo_id)
+        if proc_normalized is None:
+            return
+        
+        # Buscar índice do processo
+        mask = self.estado['PROCESSO'].astype(str).str.strip() == proc_normalized
+        indices = self.estado[mask].index
+        
+        if len(indices) == 0:
+            # Criar nova entrada
+            nova_linha = {
+                'PROCESSO': proc_normalized,
+                'VALOR_TOTAL_PROCESSO': valor_total_processo if valor_total_processo is not None else 0.0,
+                'TOTAL_ANTECIPACOES': 0.0,
+                'TOTAL_PAGAMENTOS_REGULARES': float(valor_recebido),
+                'TOTAL_PAGO_ACUMULADO': float(valor_recebido),
+                'TOTAL_ADIANTADO_COMISSAO': 0.0,
+                'STATUS_PAGAMENTO': status_pagamento,
+                'STATUS_RECONCILIACAO': 'Nao Realizada',
+                'STATUS_PROCESSO_ANALISE': None,
+                'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
+            }
+            self.estado = pd.concat([self.estado, pd.DataFrame([nova_linha])], ignore_index=True, sort=False)
+        else:
+            # Atualizar entrada existente
+            idx = indices[0]
+            
+            # Incrementar total pagamentos regulares
+            pagtos_anterior = pd.to_numeric(self.estado.at[idx, 'TOTAL_PAGAMENTOS_REGULARES'], errors='coerce')
+            pagtos_anterior = float(pagtos_anterior) if not pd.isna(pagtos_anterior) else 0.0
+            self.estado.at[idx, 'TOTAL_PAGAMENTOS_REGULARES'] = pagtos_anterior + float(valor_recebido)
+            
+            # Recalcular total pago acumulado
+            antecipacoes = pd.to_numeric(self.estado.at[idx, 'TOTAL_ANTECIPACOES'], errors='coerce')
+            antecipacoes = float(antecipacoes) if not pd.isna(antecipacoes) else 0.0
+            self.estado.at[idx, 'TOTAL_PAGO_ACUMULADO'] = antecipacoes + pagtos_anterior + float(valor_recebido)
+            
+            # Atualizar status de pagamento se fornecido
+            if status_pagamento is not None:
+                self.estado.at[idx, 'STATUS_PAGAMENTO'] = str(status_pagamento)
+            
+            # Atualizar valor total se fornecido e se estava vazio
+            if valor_total_processo is not None:
+                valor_atual = pd.to_numeric(self.estado.at[idx, 'VALOR_TOTAL_PROCESSO'], errors='coerce')
+                if pd.isna(valor_atual) or valor_atual == 0.0:
+                    self.estado.at[idx, 'VALOR_TOTAL_PROCESSO'] = float(valor_total_processo)
+            
+            # Atualizar timestamp
+            self.estado.at[idx, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
+    
     def update_commission_advanced(self, processo_id, valor_comissao: float) -> None:
         """
         Incrementa TOTAL_ADIANTADO_COMISSAO para um processo.
@@ -261,6 +391,8 @@ class ProcessStateManager:
             nova_linha = {
                 'PROCESSO': proc_normalized,
                 'VALOR_TOTAL_PROCESSO': 0.0,
+                'TOTAL_ANTECIPACOES': 0.0,
+                'TOTAL_PAGAMENTOS_REGULARES': 0.0,
                 'TOTAL_PAGO_ACUMULADO': 0.0,
                 'TOTAL_ADIANTADO_COMISSAO': float(valor_comissao),
                 'STATUS_PAGAMENTO': None,
@@ -299,10 +431,10 @@ class ProcessStateManager:
             idx = indices[0]
             
             if status_processo_analise is not None:
-                self.estado.at[idx, 'STATUS_PROCESSO_ANALISE'] = status_processo_analise
+                self.estado.at[idx, 'STATUS_PROCESSO_ANALISE'] = str(status_processo_analise)
             
             if status_pagamento is not None:
-                self.estado.at[idx, 'STATUS_PAGAMENTO'] = status_pagamento
+                self.estado.at[idx, 'STATUS_PAGAMENTO'] = str(status_pagamento)
             
             self.estado.at[idx, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
     

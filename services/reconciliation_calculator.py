@@ -170,31 +170,64 @@ class ReconciliationCalculator:
                 comissao_potencial = valor_item * taxa_rateio * pe
                 comissao_calculada = comissao_potencial * fc_final
                 
-                # Montar linha detalhada
+                # Montar linha detalhada (ordem compatível com COMISSOES_CALCULADAS)
+                # Ordem: id, nome, cargo, processo, cod_produto, desc, linha, grupo, subgrupo, tipo_merc,
+                #        fat_item, taxa_rateio, pe, fc, [detalhes_fc...], comissao_pot, comissao_calc
                 linha = {
-                    'processo': processo_id,
                     'id_colaborador': colab.get('id_colaborador'),
                     'nome_colaborador': colab['nome'],
                     'cargo': colab['cargo'],
+                    'processo': processo_id,
                     'cod_produto': contexto.get('cod_produto'),
                     'descricao_produto': contexto.get('descricao_produto'),
-                    'faturamento_item': valor_item,
                     'linha': contexto['linha'],
                     'grupo': contexto['grupo'],
                     'subgrupo': contexto['subgrupo'],
                     'tipo_mercadoria': contexto['tipo_mercadoria'],
+                    'faturamento_item': valor_item,
                     'taxa_rateio_aplicada': taxa_rateio,
                     'percentual_elegibilidade_pe': pe,
-                    'fator_correcao_fc': fc_final,
-                    'comissao_potencial_maxima': comissao_potencial,
-                    'comissao_calculada': comissao_calculada,
-                    'tipo_lancamento': 'Reconciliacao',
-                    'mes_faturamento': mes_fat,
-                    'ano_faturamento': ano_fat
+                    'fator_correcao_fc': fc_final
                 }
                 
-                # Adicionar detalhes do FC (se disponíveis)
-                linha.update(fc_detalhes)
+                # Expandir detalhes do FC em colunas separadas (mesmo formato de COMISSOES_CALCULADAS)
+                mapping = {
+                    'faturamento_linha': 'fat_linha',
+                    'conversao_linha': 'conv_linha',
+                    'faturamento_individual': 'fat_ind',
+                    'conversao_individual': 'conv_ind',
+                    'rentabilidade': 'rentab',
+                    'retencao_clientes': 'retencao',
+                    'meta_fornecedor_1': 'forn1',
+                    'meta_fornecedor_2': 'forn2'
+                }
+                
+                for comp, short in mapping.items():
+                    detalhes = fc_detalhes.get(comp) if isinstance(fc_detalhes, dict) else None
+                    if detalhes and isinstance(detalhes, dict):
+                        linha[f'peso_{short}'] = detalhes.get('peso', None)
+                        linha[f'realizado_{short}'] = detalhes.get('realizado', None)
+                        linha[f'meta_{short}'] = detalhes.get('meta', None)
+                        linha[f'ating_{short}'] = detalhes.get('atingimento', None)
+                        linha[f'ating_cap_{short}'] = detalhes.get('atingimento_cap', None)
+                        linha[f'comp_fc_{short}'] = detalhes.get('componente_fc', None)
+                        # Para fornecedores, incluir moeda
+                        if comp.startswith('meta_fornecedor'):
+                            linha[f'moeda_{short}'] = detalhes.get('moeda', None)
+                    else:
+                        # Se não houver detalhes, preencher com None
+                        linha[f'peso_{short}'] = None
+                        linha[f'realizado_{short}'] = None
+                        linha[f'meta_{short}'] = None
+                        linha[f'ating_{short}'] = None
+                        linha[f'ating_cap_{short}'] = None
+                        linha[f'comp_fc_{short}'] = None
+                        if comp.startswith('meta_fornecedor'):
+                            linha[f'moeda_{short}'] = None
+                
+                # Adicionar colunas finais (após os detalhes do FC)
+                linha['comissao_potencial_maxima'] = comissao_potencial
+                linha['comissao_calculada'] = comissao_calculada
                 
                 linhas_detalhadas.append(linha)
         

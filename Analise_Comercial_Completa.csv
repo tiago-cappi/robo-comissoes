@@ -1,2 +1,3 @@
-﻿Processo,Dt Emissão,Data Aceite,Valor Realizado,Negócio,Grupo,Subgrupo,Tipo de Mercadoria,Consultor Interno,Código Produto,Descrição Produto,Representante-pedido,Status Processo,Operação,Valor Orçado,Fabricante,Gerente Comercial-Pedido,Cliente
-FC-Base3,2025-09-15 00:00:00,2025-09-15 00:00:00,100,SSO,Detector Portátil,MicroClip,Produto,ANDREY.ANDRADE,HON-MCXL-BASE,Base Teste FC,ANDRÉ LUIS GONCALVES CAMARGO,FATURADO,PVEN,0,HON,,Cliente Teste
+﻿Processo,Dt Emissão,Data Aceite,Valor Realizado,Negócio,Grupo,Subgrupo,Tipo de Mercadoria,Consultor Interno,Código Produto,Descrição Produto,Representante-pedido,Status Processo,Operação,Valor Orçado,Fabricante,Gerente Comercial-Pedido,Cliente,Numero NF
+999999,2025-09-15 00:00:00,2025-09-15 00:00:00,100,SSO,Detector Portátil,MicroClip,Produto,ANDREY.ANDRADE,HON-MCXL-BASE,Base Teste FC,ANDRÉ LUIS GONCALVES CAMARGO,FATURADO,PVEN,0,HON,,005309,048341
+999998,2025-09-15 00:00:00,2025-09-15 00:00:00,100,SSO,Detector Portátil,MicroClip,Produto,ANDREY.ANDRADE,HON-MCXL-BASE,Base Teste FC,ANDRÉ LUIS GONCALVES CAMARGO,FATURADO,PVEN,0,HON,,005309,048341
