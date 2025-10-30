@@ -1,0 +1,392 @@
+"""
+Gerenciamento do estado de processos.
+
+Este módulo fornece uma interface centralizada para gerenciar o estado dos processos
+(ESTADO) que rastreia recebimentos, adiantamentos, reconciliações e status de pagamento.
+"""
+
+import pandas as pd
+import os
+from datetime import datetime
+from typing import Optional, Dict, List
+import sys
+
+# Adicionar path para importar utils
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.normalization import normalize_text, normalize_process_id
+
+
+# Esquema padrão do estado
+ESTADO_COLUMNS = [
+    'PROCESSO',
+    'VALOR_TOTAL_PROCESSO',
+    'TOTAL_PAGO_ACUMULADO',
+    'TOTAL_ADIANTADO_COMISSAO',
+    'STATUS_PAGAMENTO',
+    'STATUS_RECONCILIACAO',
+    'STATUS_PROCESSO_ANALISE',
+    'ULTIMA_ATUALIZACAO'
+]
+
+
+class ProcessStateManager:
+    """
+    Gerencia o estado persistente dos processos.
+    
+    O estado rastreia informações como:
+    - Valores totais dos processos
+    - Total pago acumulado (recebimentos)
+    - Total de comissões adiantadas
+    - Status de pagamento e reconciliação
+    
+    Attributes:
+        estado: DataFrame com o estado atual
+        filepath: Caminho do arquivo Excel de estado
+    """
+    
+    def __init__(self, estado_df: Optional[pd.DataFrame] = None, filepath: str = 'Estado_Processos_Recebimento.xlsx'):
+        """
+        Inicializa o gerenciador de estado.
+        
+        Args:
+            estado_df: DataFrame inicial (se None, cria vazio)
+            filepath: Caminho do arquivo de estado
+        """
+        self.filepath = filepath
+        
+        if estado_df is not None and not estado_df.empty:
+            self.estado = self._normalize_estado(estado_df)
+        else:
+            self.estado = self._create_empty_state()
+    
+    def _create_empty_state(self) -> pd.DataFrame:
+        """Cria DataFrame de estado vazio com colunas corretas."""
+        return pd.DataFrame(columns=ESTADO_COLUMNS)
+    
+    def _normalize_estado(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normaliza DataFrame de estado para garantir colunas e tipos corretos.
+        
+        Args:
+            df: DataFrame a ser normalizado
+        
+        Returns:
+            DataFrame normalizado
+        """
+        # Adicionar colunas faltantes
+        for col in ESTADO_COLUMNS:
+            if col not in df.columns:
+                df[col] = None
+        
+        # Selecionar apenas colunas esperadas (na ordem correta)
+        df = df[ESTADO_COLUMNS].copy()
+        
+        # Normalizar tipos numéricos
+        for num_col in ['TOTAL_PAGO_ACUMULADO', 'TOTAL_ADIANTADO_COMISSAO', 'VALOR_TOTAL_PROCESSO']:
+            df[num_col] = pd.to_numeric(df[num_col], errors='coerce').fillna(0.0)
+        
+        # Normalizar status (converter nan para None)
+        if 'STATUS_PAGAMENTO' in df.columns:
+            df['STATUS_PAGAMENTO'] = df['STATUS_PAGAMENTO'].astype(str).replace({'nan': None})
+        
+        return df
+    
+    def load_from_file(self, filepath: Optional[str] = None) -> bool:
+        """
+        Carrega estado de arquivo Excel.
+        
+        Args:
+            filepath: Caminho do arquivo (usa self.filepath se None)
+        
+        Returns:
+            True se carregou com sucesso, False caso contrário
+        """
+        if filepath is None:
+            filepath = self.filepath
+        
+        if not os.path.exists(filepath):
+            self.estado = self._create_empty_state()
+            return False
+        
+        try:
+            # Tentar ler planilha 'ESTADO'
+            try:
+                df_estado = pd.read_excel(filepath, sheet_name='ESTADO')
+            except Exception:
+                # Fallback: ler primeira planilha
+                df_estado = pd.read_excel(filepath)
+            
+            self.estado = self._normalize_estado(df_estado)
+            return True
+            
+        except Exception as e:
+            print(f"[AVISO] Falha ao carregar estado de {filepath}: {e}")
+            self.estado = self._create_empty_state()
+            return False
+    
+    def save_to_file(self, filepath: Optional[str] = None) -> bool:
+        """
+        Salva estado em arquivo Excel.
+        
+        Args:
+            filepath: Caminho do arquivo (usa self.filepath se None)
+        
+        Returns:
+            True se salvou com sucesso, False caso contrário
+        """
+        if filepath is None:
+            filepath = self.filepath
+        
+        try:
+            with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
+                self.estado.to_excel(writer, sheet_name='ESTADO', index=False)
+            return True
+            
+        except Exception as e:
+            print(f"[AVISO] Falha ao salvar estado em {filepath}: {e}")
+            return False
+    
+    def get_process_state(self, processo_id) -> Optional[Dict]:
+        """
+        Retorna estado de um processo específico.
+        
+        Args:
+            processo_id: ID do processo (qualquer tipo - será normalizado)
+        
+        Returns:
+            Dicionário com estado do processo, ou None se não encontrado
+        """
+        proc_normalized = normalize_process_id(processo_id)
+        if proc_normalized is None:
+            return None
+        
+        # Buscar no estado
+        mask = self.estado['PROCESSO'].astype(str).str.strip() == proc_normalized
+        matches = self.estado[mask]
+        
+        if matches.empty:
+            return None
+        
+        return matches.iloc[0].to_dict()
+    
+    def process_exists(self, processo_id) -> bool:
+        """
+        Verifica se processo existe no estado.
+        
+        Args:
+            processo_id: ID do processo
+        
+        Returns:
+            True se existe, False caso contrário
+        """
+        return self.get_process_state(processo_id) is not None
+    
+    def update_payment_received(self, processo_id, valor_recebido: float, 
+                                valor_total_processo: Optional[float] = None,
+                                status_pagamento: Optional[str] = None) -> None:
+        """
+        Atualiza TOTAL_PAGO_ACUMULADO para um processo.
+        
+        Se o processo não existir, cria nova entrada. Se existir, incrementa o valor.
+        
+        Args:
+            processo_id: ID do processo
+            valor_recebido: Valor recebido nesta atualização
+            valor_total_processo: Valor total do processo (opcional)
+            status_pagamento: Status do pagamento (opcional)
+        """
+        proc_normalized = normalize_process_id(processo_id)
+        if proc_normalized is None:
+            return
+        
+        # Buscar índice do processo
+        mask = self.estado['PROCESSO'].astype(str).str.strip() == proc_normalized
+        indices = self.estado[mask].index
+        
+        if len(indices) == 0:
+            # Criar nova entrada
+            nova_linha = {
+                'PROCESSO': proc_normalized,
+                'VALOR_TOTAL_PROCESSO': valor_total_processo if valor_total_processo is not None else 0.0,
+                'TOTAL_PAGO_ACUMULADO': float(valor_recebido),
+                'TOTAL_ADIANTADO_COMISSAO': 0.0,
+                'STATUS_PAGAMENTO': status_pagamento,
+                'STATUS_RECONCILIACAO': 'Nao Realizada',
+                'STATUS_PROCESSO_ANALISE': None,
+                'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
+            }
+            self.estado = pd.concat([self.estado, pd.DataFrame([nova_linha])], ignore_index=True, sort=False)
+        else:
+            # Atualizar entrada existente
+            idx = indices[0]
+            
+            # Incrementar total pago
+            pago_anterior = pd.to_numeric(self.estado.at[idx, 'TOTAL_PAGO_ACUMULADO'], errors='coerce')
+            pago_anterior = float(pago_anterior) if not pd.isna(pago_anterior) else 0.0
+            self.estado.at[idx, 'TOTAL_PAGO_ACUMULADO'] = pago_anterior + float(valor_recebido)
+            
+            # Atualizar status de pagamento se fornecido
+            if status_pagamento is not None:
+                self.estado.at[idx, 'STATUS_PAGAMENTO'] = status_pagamento
+            
+            # Atualizar valor total se fornecido e se estava vazio
+            if valor_total_processo is not None:
+                valor_atual = pd.to_numeric(self.estado.at[idx, 'VALOR_TOTAL_PROCESSO'], errors='coerce')
+                if pd.isna(valor_atual) or valor_atual == 0.0:
+                    self.estado.at[idx, 'VALOR_TOTAL_PROCESSO'] = float(valor_total_processo)
+            
+            # Atualizar timestamp
+            self.estado.at[idx, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
+    
+    def update_commission_advanced(self, processo_id, valor_comissao: float) -> None:
+        """
+        Incrementa TOTAL_ADIANTADO_COMISSAO para um processo.
+        
+        Se o processo não existir, cria nova entrada.
+        
+        Args:
+            processo_id: ID do processo
+            valor_comissao: Valor da comissão adiantada (será somado ao total)
+        """
+        proc_normalized = normalize_process_id(processo_id)
+        if proc_normalized is None:
+            return
+        
+        # Buscar índice do processo
+        mask = self.estado['PROCESSO'].astype(str).str.strip() == proc_normalized
+        indices = self.estado[mask].index
+        
+        if len(indices) == 0:
+            # Criar nova entrada
+            nova_linha = {
+                'PROCESSO': proc_normalized,
+                'VALOR_TOTAL_PROCESSO': 0.0,
+                'TOTAL_PAGO_ACUMULADO': 0.0,
+                'TOTAL_ADIANTADO_COMISSAO': float(valor_comissao),
+                'STATUS_PAGAMENTO': None,
+                'STATUS_RECONCILIACAO': 'Nao Realizada',
+                'STATUS_PROCESSO_ANALISE': None,
+                'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
+            }
+            self.estado = pd.concat([self.estado, pd.DataFrame([nova_linha])], ignore_index=True, sort=False)
+        else:
+            # Incrementar comissão adiantada
+            idx = indices[0]
+            adiantado_anterior = pd.to_numeric(self.estado.at[idx, 'TOTAL_ADIANTADO_COMISSAO'], errors='coerce')
+            adiantado_anterior = float(adiantado_anterior) if not pd.isna(adiantado_anterior) else 0.0
+            self.estado.at[idx, 'TOTAL_ADIANTADO_COMISSAO'] = adiantado_anterior + float(valor_comissao)
+            self.estado.at[idx, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
+    
+    def update_process_status(self, processo_id, 
+                             status_processo_analise: Optional[str] = None,
+                             status_pagamento: Optional[str] = None) -> None:
+        """
+        Atualiza status de análise e/ou pagamento de um processo.
+        
+        Args:
+            processo_id: ID do processo
+            status_processo_analise: Status do processo na análise (ex: "Faturado")
+            status_pagamento: Status do pagamento (ex: "Quitado")
+        """
+        proc_normalized = normalize_process_id(processo_id)
+        if proc_normalized is None:
+            return
+        
+        mask = self.estado['PROCESSO'].astype(str).str.strip() == proc_normalized
+        indices = self.estado[mask].index
+        
+        if len(indices) > 0:
+            idx = indices[0]
+            
+            if status_processo_analise is not None:
+                self.estado.at[idx, 'STATUS_PROCESSO_ANALISE'] = status_processo_analise
+            
+            if status_pagamento is not None:
+                self.estado.at[idx, 'STATUS_PAGAMENTO'] = status_pagamento
+            
+            self.estado.at[idx, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
+    
+    def mark_reconciliation_done(self, processo_id) -> None:
+        """
+        Marca reconciliação como realizada para um processo.
+        
+        Args:
+            processo_id: ID do processo
+        """
+        proc_normalized = normalize_process_id(processo_id)
+        if proc_normalized is None:
+            return
+        
+        mask = self.estado['PROCESSO'].astype(str).str.strip() == proc_normalized
+        indices = self.estado[mask].index
+        
+        if len(indices) > 0:
+            idx = indices[0]
+            self.estado.at[idx, 'STATUS_RECONCILIACAO'] = 'Realizada'
+            self.estado.at[idx, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
+    
+    def get_eligible_for_reconciliation(self) -> pd.DataFrame:
+        """
+        Retorna processos elegíveis para reconciliação.
+        
+        Critérios:
+        - STATUS_PAGAMENTO contém 'Quitado'
+        - STATUS_PROCESSO_ANALISE == 'Faturado'
+        - STATUS_RECONCILIACAO não é 'Realizada' ou 'Concluida'
+        
+        Returns:
+            DataFrame com processos elegíveis
+        """
+        if self.estado.empty:
+            return pd.DataFrame(columns=ESTADO_COLUMNS)
+        
+        # Normalizar status para comparação
+        estado_norm = self.estado.copy()
+        estado_norm['_status_pag_norm'] = estado_norm['STATUS_PAGAMENTO'].apply(normalize_text)
+        estado_norm['_status_analise_norm'] = estado_norm['STATUS_PROCESSO_ANALISE'].apply(normalize_text)
+        estado_norm['_status_reconc_norm'] = estado_norm['STATUS_RECONCILIACAO'].apply(normalize_text)
+        
+        # Aplicar filtros
+        mask_quitado = estado_norm['_status_pag_norm'].str.contains('QUITADO', na=False)
+        mask_faturado = estado_norm['_status_analise_norm'] == 'FATURADO'
+        mask_nao_reconciliado = ~estado_norm['_status_reconc_norm'].isin(['REALIZADA', 'CONCLUIDA'])
+        
+        eligible = self.estado[mask_quitado & mask_faturado & mask_nao_reconciliado].copy()
+        
+        return eligible
+    
+    def get_process_summary(self) -> Dict:
+        """
+        Retorna resumo estatístico do estado.
+        
+        Returns:
+            Dicionário com estatísticas
+        """
+        if self.estado.empty:
+            return {
+                'total_processos': 0,
+                'total_pago': 0.0,
+                'total_adiantado': 0.0,
+                'processos_quitados': 0,
+                'processos_reconciliados': 0,
+                'processos_elegiveis_reconciliacao': 0
+            }
+        
+        return {
+            'total_processos': len(self.estado),
+            'total_pago': float(self.estado['TOTAL_PAGO_ACUMULADO'].sum()),
+            'total_adiantado': float(self.estado['TOTAL_ADIANTADO_COMISSAO'].sum()),
+            'processos_quitados': int((self.estado['STATUS_PAGAMENTO'].apply(normalize_text).str.contains('QUITADO', na=False)).sum()),
+            'processos_reconciliados': int((self.estado['STATUS_RECONCILIACAO'].apply(normalize_text) == 'REALIZADA').sum()),
+            'processos_elegiveis_reconciliacao': len(self.get_eligible_for_reconciliation())
+        }
+    
+    def get_dataframe(self) -> pd.DataFrame:
+        """
+        Retorna o DataFrame de estado (cópia).
+        
+        Returns:
+            Cópia do DataFrame de estado
+        """
+        return self.estado.copy()
+
