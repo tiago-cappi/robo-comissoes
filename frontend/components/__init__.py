@@ -1,3 +1,0 @@
-"""
-Componentes reutilizáveis do frontend
-"""

@@ -1,3 +1,0 @@
-"""
-Configurações do frontend
-"""
