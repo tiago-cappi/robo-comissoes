@@ -62,6 +62,8 @@ const ResultadosPage = () => {
     pageSize: 20,
     total: 0,
   });
+  const [sortConfig, setSortConfig] = useState({ sortBy: null, sortOrder: null });
+  const [valoresUnicosCache, setValoresUnicosCache] = useState({});
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [registroSelecionado, setRegistroSelecionado] = useState(null);
   const [presetAtivo, setPresetAtivo] = useState(null);
@@ -78,7 +80,7 @@ const ResultadosPage = () => {
     } catch (error) {
       message.error(`Erro ao carregar abas: ${error.message}`);
     }
-  }, []);
+  }, [abaAtiva]);
 
   const carregarDados = useCallback(async () => {
     if (!abaAtiva) return;
@@ -88,6 +90,8 @@ const ResultadosPage = () => {
       const params = {
         page: pagination.current,
         size: pagination.pageSize,
+        sortBy: sortConfig.sortBy,
+        sortOrder: sortConfig.sortOrder,
       };
 
       const response = await resultadosAPI.lerAba(abaAtiva, params);
@@ -101,7 +105,8 @@ const ResultadosPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [abaAtiva, pagination.current, pagination.pageSize]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abaAtiva, pagination.current, pagination.pageSize, sortConfig.sortBy, sortConfig.sortOrder]);
 
   useEffect(() => {
     carregarAbas();
@@ -109,9 +114,62 @@ const ResultadosPage = () => {
 
   useEffect(() => {
     if (abaAtiva) {
+      // Resetar paginação e ordenação ao trocar de aba
+      setPagination({ current: 1, pageSize: 20, total: 0 });
+      setSortConfig({ sortBy: null, sortOrder: null });
       carregarDados();
     }
-  }, [abaAtiva, carregarDados]);
+  }, [abaAtiva]);
+
+  useEffect(() => {
+    if (abaAtiva) {
+      carregarDados();
+    }
+  }, [abaAtiva, pagination.current, pagination.pageSize, sortConfig, carregarDados]);
+
+  const handleTableChange = (paginationNew, filters, sorter) => {
+    // Atualizar paginação
+    setPagination({
+      ...pagination,
+      current: paginationNew.current,
+      pageSize: paginationNew.pageSize,
+    });
+
+    // Atualizar ordenação
+    if (sorter.field) {
+      setSortConfig({
+        sortBy: sorter.field,
+        sortOrder: sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : null,
+      });
+    } else {
+      setSortConfig({ sortBy: null, sortOrder: null });
+    }
+  };
+
+  const obterValoresUnicos = useCallback(async (coluna) => {
+    if (!abaAtiva || !coluna) return [];
+
+    // Verificar se a coluna existe nas colunas disponíveis
+    if (!colunas.includes(coluna)) {
+      return [];
+    }
+
+    const cacheKey = `${abaAtiva}_${coluna}`;
+    if (valoresUnicosCache[cacheKey]) {
+      return valoresUnicosCache[cacheKey];
+    }
+
+    try {
+      const response = await resultadosAPI.obterValoresUnicos(abaAtiva, coluna);
+      const valores = response.data.valores || [];
+      setValoresUnicosCache((prev) => ({ ...prev, [cacheKey]: valores }));
+      return valores;
+    } catch (error) {
+      // Erro 404 (coluna não encontrada) é esperado e não deve ser mostrado
+      // Outros erros também serão silenciosos para não poluir a interface
+      return [];
+    }
+  }, [abaAtiva, colunas, valoresUnicosCache]);
 
   const aplicarPreset = useCallback((preset) => {
     if (preset === 'fc_detalhado') {
@@ -145,7 +203,7 @@ const ResultadosPage = () => {
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      
+
       const contentDisposition = response.headers['content-disposition'];
       let filename = 'Comissoes_Calculadas.xlsx';
       if (contentDisposition) {
@@ -154,22 +212,98 @@ const ResultadosPage = () => {
           filename = filenameMatch[1];
         }
       }
-      
+
       link.setAttribute('download', filename);
       document.body.appendChild(link);
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-      
+
       message.success('Arquivo baixado com sucesso!');
     } catch (error) {
       message.error(`Erro ao baixar: ${error.message}`);
     }
   };
 
+  // Componente de filtro com dropdown de valores únicos
+  const criarFilterDropdown = (col) => {
+    const FilterDropdownComponent = ({ setSelectedKeys, selectedKeys, confirm }) => {
+      const [valoresUnicos, setValoresUnicos] = useState([]);
+      const [carregando, setCarregando] = useState(false);
+      const [buscaTexto, setBuscaTexto] = useState('');
+
+      useEffect(() => {
+        const carregar = async () => {
+          setCarregando(true);
+          const valores = await obterValoresUnicos(col);
+          setValoresUnicos(valores);
+          setCarregando(false);
+        };
+        carregar();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [col]);
+
+      const valoresFiltrados = valoresUnicos.filter((val) =>
+        String(val).toLowerCase().includes(buscaTexto.toLowerCase())
+      );
+
+      return (
+        <div style={{ padding: 8, minWidth: 200 }}>
+          <Input
+            placeholder="Buscar..."
+            value={buscaTexto}
+            onChange={(e) => setBuscaTexto(e.target.value)}
+            style={{ marginBottom: 8 }}
+            allowClear
+          />
+          <Select
+            mode="multiple"
+            placeholder={`Selecione valores para ${col}`}
+            value={selectedKeys}
+            onChange={(values) => setSelectedKeys(values || [])}
+            style={{ width: '100%', marginBottom: 8 }}
+            loading={carregando}
+            showSearch
+            filterOption={false}
+            maxTagCount="responsive"
+            notFoundContent={carregando ? 'Carregando...' : 'Nenhum valor encontrado'}
+          >
+            {valoresFiltrados.map((val) => (
+              <Option key={String(val)} value={String(val)}>
+                {val}
+              </Option>
+            ))}
+          </Select>
+          <Space>
+            <Button
+              type="primary"
+              onClick={confirm}
+              size="small"
+              style={{ width: 90 }}
+            >
+              Filtrar
+            </Button>
+            <Button
+              onClick={() => {
+                setSelectedKeys([]);
+                setBuscaTexto('');
+                confirm();
+              }}
+              size="small"
+              style={{ width: 90 }}
+            >
+              Limpar
+            </Button>
+          </Space>
+        </div>
+      );
+    };
+    return FilterDropdownComponent;
+  };
+
   const colunasTabela = (colunasVisiveis || colunas).map((col) => {
     const temGlossario = GLOSSARIO[col.toLowerCase()];
-    
+
     return {
       title: (
         <Space>
@@ -185,39 +319,17 @@ const ResultadosPage = () => {
       key: col,
       width: 150,
       sorter: true,
+      sortOrder: sortConfig.sortBy === col ? (sortConfig.sortOrder === 'asc' ? 'ascend' : 'descend') : null,
       ellipsis: true,
       fixed: ['processo', 'nome_colaborador', 'cargo'].includes(col) ? 'left' : undefined,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm }) => (
-        <div style={{ padding: 8 }}>
-          <Input
-            placeholder={`Filtrar ${col}`}
-            value={selectedKeys[0]}
-            onChange={(e) => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            onPressEnter={confirm}
-            style={{ marginBottom: 8, display: 'block' }}
-          />
-          <Space>
-            <Button type="primary" onClick={confirm} size="small" style={{ width: 90 }}>
-              Filtrar
-            </Button>
-            <Button
-              onClick={() => {
-                setSelectedKeys([]);
-                confirm();
-              }}
-              size="small"
-              style={{ width: 90 }}
-            >
-              Limpar
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: criarFilterDropdown(col),
       filterIcon: (filtered) => (
         <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />
       ),
-      onFilter: (value, record) =>
-        String(record[col] || '').toLowerCase().includes(value.toLowerCase()),
+      onFilter: (value, record) => {
+        if (!value || value.length === 0) return true;
+        return value.includes(String(record[col] || ''));
+      },
       render: (text) => {
         // Formatação para valores numéricos
         if (typeof text === 'number' || (typeof text === 'string' && !isNaN(text) && text !== '')) {
@@ -310,14 +422,14 @@ const ResultadosPage = () => {
                   key: idx,
                 }))}
                 loading={loading}
+                onChange={handleTableChange}
                 pagination={{
-                  ...pagination,
+                  current: pagination.current,
+                  pageSize: pagination.pageSize,
+                  total: pagination.total,
                   showSizeChanger: true,
                   showTotal: (total) => `Total: ${total} linhas`,
                   pageSizeOptions: ['20', '50', '100'],
-                  onChange: (page, pageSize) => {
-                    setPagination({ ...pagination, current: page, pageSize });
-                  },
                 }}
                 scroll={{ x: 'max-content', y: 600 }}
                 size="small"
@@ -352,9 +464,9 @@ const ResultadosPage = () => {
               >
                 {typeof value === 'number' || (typeof value === 'string' && !isNaN(value) && value !== '')
                   ? parseFloat(value).toLocaleString('pt-BR', {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })
                   : value || '-'}
               </Descriptions.Item>
             ))}

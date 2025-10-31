@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Modal,
   Form,
@@ -20,14 +20,64 @@ const BulkApplyModal = ({ visible, onCancel, onConfirm, abaNome, dados = [], col
   const [currentStep, setCurrentStep] = useState(0);
   const [previewData, setPreviewData] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [valoresUnicosCache, setValoresUnicosCache] = useState({});
+  const [dadosCompletos, setDadosCompletos] = useState([]);
+
+  const obterValoresUnicos = useCallback(async (coluna) => {
+    if (!abaNome || !coluna) return [];
+
+    // Verificar se a coluna existe nas colunas disponíveis
+    if (!colunas.includes(coluna)) {
+      return [];
+    }
+
+    const cacheKey = `${abaNome}_${coluna}`;
+    if (valoresUnicosCache[cacheKey]) {
+      return valoresUnicosCache[cacheKey];
+    }
+
+    try {
+      const response = await regrasAPI.obterValoresUnicos(abaNome, coluna);
+      const valores = response.data.valores || [];
+      setValoresUnicosCache((prev) => ({ ...prev, [cacheKey]: valores }));
+      return valores;
+    } catch (error) {
+      // Erro 404 (coluna não encontrada) é esperado e não deve ser mostrado
+      // Outros erros também serão silenciosos para não poluir a interface
+      return [];
+    }
+  }, [abaNome, colunas, valoresUnicosCache]);
+
+  const carregarDadosCompletos = useCallback(async () => {
+    try {
+      const response = await regrasAPI.lerAba(abaNome, { allPages: true });
+      setDadosCompletos(response.data.data || []);
+      
+      // Pre-carregar valores únicos das colunas de escopo
+      const colunasEscopo = ['linha', 'grupo', 'subgrupo', 'tipo_mercadoria'].filter(
+        (col) => colunas.includes(col)
+      );
+      
+      for (const col of colunasEscopo) {
+        await obterValoresUnicos(col);
+      }
+    } catch (error) {
+      message.error(`Erro ao carregar dados: ${error.message}`);
+    }
+  }, [abaNome, colunas, obterValoresUnicos]);
 
   useEffect(() => {
     if (!visible) {
       form.resetFields();
       setCurrentStep(0);
       setPreviewData([]);
+      setValoresUnicosCache({});
+      setDadosCompletos([]);
+    } else {
+      // Carregar dados completos ao abrir o modal
+      carregarDadosCompletos();
     }
-  }, [visible, form]);
+  }, [visible, form, abaNome, carregarDadosCompletos]);
 
   const handlePreview = async () => {
     try {
@@ -76,15 +126,35 @@ const BulkApplyModal = ({ visible, onCancel, onConfirm, abaNome, dados = [], col
     }
   };
 
-  // Obter valores únicos para filtros
-  const getUniqueValues = (coluna) => {
-    if (!dados || !coluna) return [];
+  // Obter valores únicos filtrados baseado nos outros filtros selecionados
+  const getValoresFiltrados = useCallback((coluna) => {
+    const valoresEscopo = form.getFieldValue('escopo') || {};
+    
+    // Se não há filtros selecionados, retornar todos os valores únicos
+    const temFiltros = Object.values(valoresEscopo).some(v => v && v.length > 0);
+    if (!temFiltros) {
+      const cacheKey = `${abaNome}_${coluna}`;
+      return valoresUnicosCache[cacheKey] || [];
+    }
+
+    // Filtrar dados completos baseado nos outros filtros
+    let dadosFiltrados = [...dadosCompletos];
+    
+    Object.keys(valoresEscopo).forEach((key) => {
+      if (key !== coluna && valoresEscopo[key] && valoresEscopo[key].length > 0) {
+        dadosFiltrados = dadosFiltrados.filter((item) =>
+          valoresEscopo[key].includes(String(item[key] || ''))
+        );
+      }
+    });
+
+    // Extrair valores únicos da coluna dos dados filtrados
     const values = new Set();
-    dados.forEach((item) => {
-      if (item[coluna]) values.add(item[coluna]);
+    dadosFiltrados.forEach((item) => {
+      if (item[coluna]) values.add(String(item[coluna]));
     });
     return Array.from(values).sort();
-  };
+  }, [form, dadosCompletos, valoresUnicosCache, abaNome]);
 
   // Colunas de escopo comuns
   const colunasEscopo = ['linha', 'grupo', 'subgrupo', 'tipo_mercadoria'].filter(
@@ -115,22 +185,35 @@ const BulkApplyModal = ({ visible, onCancel, onConfirm, abaNome, dados = [], col
         {currentStep === 0 && (
           <Form.Item label="Filtros de Escopo">
             <Space direction="vertical" style={{ width: '100%' }}>
-              {colunasEscopo.map((col) => (
-                <Form.Item key={col} label={col} name={['escopo', col]}>
-                  <Select
-                    mode="multiple"
-                    placeholder={`Selecione ${col}`}
-                    showSearch
-                    allowClear
-                  >
-                    {getUniqueValues(col).map((val) => (
-                      <Option key={val} value={val}>
-                        {val}
-                      </Option>
-                    ))}
-                  </Select>
-                </Form.Item>
-              ))}
+              {colunasEscopo.map((col) => {
+                const EscopoSelectWrapper = () => {
+                  const valoresEscopo = Form.useWatch(['escopo'], form);
+                  const valoresFiltrados = getValoresFiltrados(col);
+                  const valoresSelecionados = valoresEscopo?.[col] || [];
+
+                  return (
+                    <Form.Item key={col} label={col} name={['escopo', col]}>
+                      <Select
+                        mode="multiple"
+                        placeholder={`Selecione ${col}`}
+                        showSearch
+                        allowClear
+                        value={valoresSelecionados}
+                        filterOption={(input, option) =>
+                          String(option?.children || '').toLowerCase().includes(input.toLowerCase())
+                        }
+                      >
+                        {valoresFiltrados.map((val) => (
+                          <Option key={String(val)} value={String(val)}>
+                            {val}
+                          </Option>
+                        ))}
+                      </Select>
+                    </Form.Item>
+                  );
+                };
+                return <EscopoSelectWrapper key={col} />;
+              })}
             </Space>
           </Form.Item>
         )}

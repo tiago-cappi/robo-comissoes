@@ -32,7 +32,7 @@ export const regrasAPI = {
   listarAbas: () => api.get('/regras/abas'),
   
   lerAba: (nomeAba, params = {}) => {
-    const { page = 1, size = 20, sortBy, sortOrder, filters } = params;
+    const { page = 1, size = 20, sortBy, sortOrder, filters, allPages = false } = params;
     const queryParams = new URLSearchParams({
       page: page.toString(),
       size: size.toString(),
@@ -44,8 +44,14 @@ export const regrasAPI = {
     if (filters) {
       queryParams.append('filters', JSON.stringify(filters));
     }
+    if (allPages) {
+      queryParams.append('all_pages', 'true');
+    }
     return api.get(`/regras/aba/${nomeAba}?${queryParams}`);
   },
+  
+  obterValoresUnicos: (nomeAba, coluna) =>
+    api.get(`/regras/aba/${nomeAba}/valores-unicos/${coluna}`),
   
   salvarAba: (nomeAba, data, preserveColumns = true) =>
     api.post(`/regras/aba/${nomeAba}/save`, {
@@ -121,6 +127,9 @@ export const resultadosAPI = {
     }
     return api.get(`/resultado/aba/${nomeAba}?${queryParams}`);
   },
+  
+  obterValoresUnicos: (nomeAba, coluna) =>
+    api.get(`/resultado/aba/${nomeAba}/valores-unicos/${coluna}`),
   
   baixar: () => api.get('/baixar/resultado', { responseType: 'blob' }),
 };

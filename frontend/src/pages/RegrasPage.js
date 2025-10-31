@@ -8,6 +8,7 @@ import {
   Space,
   Input,
   Modal,
+  Select,
 } from 'antd';
 import {
   SaveOutlined,
@@ -23,6 +24,10 @@ import BulkApplyModal from '../components/BulkApplyModal';
 
 const { TabPane } = Tabs;
 const { Search } = Input;
+const { Option } = Select;
+
+// Abas que permitem aplicação em massa
+const ABAS_COM_BULK = ['HIERARQUIA', 'ATRIBUICOES', 'CONFIG_COMISSAO'];
 
 const RegrasPage = () => {
   const [abas, setAbas] = useState([]);
@@ -35,9 +40,12 @@ const RegrasPage = () => {
     pageSize: 20,
     total: 0,
   });
+  const [sortConfig, setSortConfig] = useState({ sortBy: null, sortOrder: null });
   const [linhasEditadas, setLinhasEditadas] = useState(new Set());
   const [dadosEditados, setDadosEditados] = useState({});
   const [modalBulkVisible, setModalBulkVisible] = useState(false);
+  const [valoresUnicosCache, setValoresUnicosCache] = useState({});
+  const [filtrosAtivos, setFiltrosAtivos] = useState({});
 
   const carregarAbas = useCallback(async () => {
     try {
@@ -50,21 +58,23 @@ const RegrasPage = () => {
     } catch (error) {
       message.error(`Erro ao carregar abas: ${error.message}`);
     }
-  }, []);
+  }, [abaAtiva]);
 
   const carregarDados = useCallback(async () => {
     if (!abaAtiva) return;
-    
+
     setLoading(true);
     try {
       const params = {
         page: pagination.current,
         size: pagination.pageSize,
+        sortBy: sortConfig.sortBy,
+        sortOrder: sortConfig.sortOrder,
       };
-      
+
       const response = await regrasAPI.lerAba(abaAtiva, params);
       const { data, total, columns } = response.data;
-      
+
       setDados(data);
       setColunas(columns || []);
       setPagination((prev) => ({ ...prev, total }));
@@ -73,7 +83,8 @@ const RegrasPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [abaAtiva, pagination.current, pagination.pageSize]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abaAtiva, pagination.current, pagination.pageSize, sortConfig.sortBy, sortConfig.sortOrder]);
 
   useEffect(() => {
     carregarAbas();
@@ -81,22 +92,84 @@ const RegrasPage = () => {
 
   useEffect(() => {
     if (abaAtiva) {
+      // Resetar paginação e ordenação ao trocar de aba
+      setPagination({ current: 1, pageSize: 20, total: 0 });
+      setSortConfig({ sortBy: null, sortOrder: null });
       carregarDados();
     }
-  }, [abaAtiva, carregarDados]);
+  }, [abaAtiva]);
+
+  useEffect(() => {
+    if (abaAtiva) {
+      carregarDados();
+    }
+  }, [abaAtiva, pagination.current, pagination.pageSize, sortConfig, carregarDados]);
+
+  const handleTableChange = (paginationNew, filters, sorter) => {
+    // Atualizar paginação
+    setPagination({
+      ...pagination,
+      current: paginationNew.current,
+      pageSize: paginationNew.pageSize,
+    });
+
+    // Atualizar ordenação
+    if (sorter.field) {
+      setSortConfig({
+        sortBy: sorter.field,
+        sortOrder: sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : null,
+      });
+    } else {
+      setSortConfig({ sortBy: null, sortOrder: null });
+    }
+
+    // Atualizar filtros ativos
+    const novosFiltros = {};
+    Object.keys(filters).forEach((key) => {
+      if (filters[key] && filters[key].length > 0) {
+        novosFiltros[key] = filters[key];
+      }
+    });
+    setFiltrosAtivos(novosFiltros);
+  };
+
+  const obterValoresUnicos = useCallback(async (coluna) => {
+    if (!abaAtiva || !coluna) return [];
+
+    // Verificar se a coluna existe nas colunas disponíveis
+    if (!colunas.includes(coluna)) {
+      return [];
+    }
+
+    const cacheKey = `${abaAtiva}_${coluna}`;
+    if (valoresUnicosCache[cacheKey]) {
+      return valoresUnicosCache[cacheKey];
+    }
+
+    try {
+      const response = await regrasAPI.obterValoresUnicos(abaAtiva, coluna);
+      const valores = response.data.valores || [];
+      setValoresUnicosCache((prev) => ({ ...prev, [cacheKey]: valores }));
+      return valores;
+    } catch (error) {
+      // Erro 404 (coluna não encontrada) é esperado e não deve ser mostrado
+      // Outros erros também serão silenciosos para não poluir a interface
+      return [];
+    }
+  }, [abaAtiva, colunas, valoresUnicosCache]);
 
   const handleEditarCelula = (record, coluna, valor) => {
     const key = record.__key || Math.random();
     const dadosNovos = { ...dadosEditados };
-    
+
     if (!dadosNovos[key]) {
       dadosNovos[key] = { ...record };
     }
     dadosNovos[key][coluna] = valor;
-    
+
     setDadosEditados(dadosNovos);
     setLinhasEditadas(new Set([...linhasEditadas, key]));
-    
+
     // Atualizar dados locais
     setDados((prev) =>
       prev.map((item) =>
@@ -125,7 +198,7 @@ const RegrasPage = () => {
       });
 
       await regrasAPI.salvarAba(abaAtiva, dadosParaSalvar, true);
-      
+
       message.success('Alterações salvas com sucesso!');
       setLinhasEditadas(new Set());
       setDadosEditados({});
@@ -149,7 +222,6 @@ const RegrasPage = () => {
   };
 
   const handleDuplicarLinha = (record) => {
-    const key = record.__key || Math.random();
     const linhaDuplicada = { ...record };
     const novoKey = `dup_${Date.now()}`;
     linhaDuplicada.__key = novoKey;
@@ -169,66 +241,137 @@ const RegrasPage = () => {
     });
   };
 
-  const handleBuscaGlobal = (value) => {
-    // Aplicar filtro de busca em todas as colunas
-    if (value) {
-      const dadosFiltrados = dados.filter((item) =>
-        Object.values(item).some((val) =>
-          String(val).toLowerCase().includes(value.toLowerCase())
-        )
-      );
-      setDados(dadosFiltrados);
+  const handleBuscaGlobal = async (value) => {
+    if (!abaAtiva) return;
+
+    if (value && value.trim()) {
+      setLoading(true);
+      try {
+        // Buscar todas as páginas sem filtros
+        const response = await regrasAPI.lerAba(abaAtiva, {
+          allPages: true,
+        });
+
+        const todosDados = response.data.data || [];
+        const termoBusca = value.trim().toLowerCase();
+
+        // Filtrar no frontend: qualquer coluna que contenha o termo
+        const dadosFiltrados = todosDados.filter((item) =>
+          Object.values(item).some((val) =>
+            String(val || '').toLowerCase().includes(termoBusca)
+          )
+        );
+
+        setDados(dadosFiltrados);
+        setPagination((prev) => ({ ...prev, total: dadosFiltrados.length, current: 1 }));
+      } catch (error) {
+        message.error(`Erro na busca: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
     } else {
+      // Limpar busca e recarregar dados normais
+      setPagination({ current: 1, pageSize: 20, total: 0 });
+      setSortConfig({ sortBy: null, sortOrder: null });
       carregarDados();
     }
   };
 
+  // Componente de filtro com dropdown de valores únicos
+  const criarFilterDropdown = (col) => {
+    const FilterDropdownComponent = ({ setSelectedKeys, selectedKeys, confirm }) => {
+      const [valoresUnicos, setValoresUnicos] = useState([]);
+      const [carregando, setCarregando] = useState(false);
+      const [buscaTexto, setBuscaTexto] = useState('');
+
+      useEffect(() => {
+        const carregar = async () => {
+          setCarregando(true);
+          const valores = await obterValoresUnicos(col);
+          setValoresUnicos(valores);
+          setCarregando(false);
+        };
+        carregar();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [col]);
+
+      const valoresFiltrados = valoresUnicos.filter((val) =>
+        String(val).toLowerCase().includes(buscaTexto.toLowerCase())
+      );
+
+      return (
+        <div style={{ padding: 8, minWidth: 200 }}>
+          <Input
+            placeholder="Buscar..."
+            value={buscaTexto}
+            onChange={(e) => setBuscaTexto(e.target.value)}
+            style={{ marginBottom: 8 }}
+            allowClear
+          />
+          <Select
+            mode="multiple"
+            placeholder={`Selecione valores para ${col}`}
+            value={selectedKeys}
+            onChange={(values) => setSelectedKeys(values || [])}
+            style={{ width: '100%', marginBottom: 8 }}
+            loading={carregando}
+            showSearch
+            filterOption={false}
+            maxTagCount="responsive"
+            notFoundContent={carregando ? 'Carregando...' : 'Nenhum valor encontrado'}
+          >
+            {valoresFiltrados.map((val) => (
+              <Option key={String(val)} value={String(val)}>
+                {val}
+              </Option>
+            ))}
+          </Select>
+          <Space>
+            <Button
+              type="primary"
+              onClick={confirm}
+              size="small"
+              style={{ width: 90 }}
+            >
+              Filtrar
+            </Button>
+            <Button
+              onClick={() => {
+                setSelectedKeys([]);
+                setBuscaTexto('');
+                confirm();
+              }}
+              size="small"
+              style={{ width: 90 }}
+            >
+              Limpar
+            </Button>
+          </Space>
+        </div>
+      );
+    };
+    return FilterDropdownComponent;
+  };
+
   const colunasTabela = colunas.map((col) => ({
-    title: col,
-    dataIndex: col,
-    key: col,
-    width: 150,
-    sorter: true,
-    filterDropdown: ({ setSelectedKeys, selectedKeys, confirm }) => (
-      <div style={{ padding: 8 }}>
-        <Input
-          placeholder={`Filtrar ${col}`}
-          value={selectedKeys[0]}
-          onChange={(e) => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-          onPressEnter={confirm}
-          style={{ marginBottom: 8, display: 'block' }}
-        />
-        <Space>
-          <Button
-            type="primary"
-            onClick={confirm}
-            size="small"
-            style={{ width: 90 }}
-          >
-            Filtrar
-          </Button>
-          <Button
-            onClick={() => {
-              setSelectedKeys([]);
-              confirm();
-            }}
-            size="small"
-            style={{ width: 90 }}
-          >
-            Limpar
-          </Button>
-        </Space>
-      </div>
-    ),
-    filterIcon: (filtered) => (
-      <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />
-    ),
-    onFilter: (value, record) =>
-      String(record[col] || '').toLowerCase().includes(value.toLowerCase()),
-    render: (text, record) => {
+      title: col,
+      dataIndex: col,
+      key: col,
+      width: 150,
+      sorter: true,
+      sortOrder: sortConfig.sortBy === col ? (sortConfig.sortOrder === 'asc' ? 'ascend' : 'descend') : null,
+      filterDropdown: criarFilterDropdown(col),
+      filterIcon: (filtered) => (
+        <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />
+      ),
+      onFilter: (value, record) => {
+        if (!value || value.length === 0) return true;
+        return value.includes(String(record[col] || ''));
+      },
+      render: (text, record) => {
       const itemKey = record.__key || Math.random();
       const isEditado = linhasEditadas.has(itemKey);
-      
+
       return (
         <Input
           value={text || ''}
@@ -302,13 +445,15 @@ const RegrasPage = () => {
             >
               Adicionar Linha
             </Button>
-            <Button
-              icon={<ThunderboltOutlined />}
-              onClick={() => setModalBulkVisible(true)}
-              type="dashed"
-            >
-              Aplicar em Massa
-            </Button>
+            {ABAS_COM_BULK.includes(abaAtiva) && (
+              <Button
+                icon={<ThunderboltOutlined />}
+                onClick={() => setModalBulkVisible(true)}
+                type="dashed"
+              >
+                Aplicar em Massa
+              </Button>
+            )}
           </Space>
         }
       >
@@ -327,14 +472,14 @@ const RegrasPage = () => {
                   key: item.__key || idx,
                 }))}
                 loading={loading}
+                onChange={handleTableChange}
                 pagination={{
-                  ...pagination,
+                  current: pagination.current,
+                  pageSize: pagination.pageSize,
+                  total: pagination.total,
                   showSizeChanger: true,
                   showTotal: (total) => `Total: ${total} linhas`,
                   pageSizeOptions: ['20', '50', '100'],
-                  onChange: (page, pageSize) => {
-                    setPagination({ ...pagination, current: page, pageSize });
-                  },
                 }}
                 scroll={{ x: 'max-content', y: 600 }}
                 size="small"
