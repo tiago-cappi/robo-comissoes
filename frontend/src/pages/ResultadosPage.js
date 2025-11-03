@@ -8,8 +8,7 @@ import {
   Input,
   Select,
   message,
-  Drawer,
-  Descriptions,
+  Modal,
   Tooltip,
 } from 'antd';
 import {
@@ -20,10 +19,18 @@ import {
   QuestionCircleOutlined,
 } from '@ant-design/icons';
 import { resultadosAPI } from '../services/api';
+import DetalhesCalculoModal from '../components/DetalhesCalculoModal';
+import ResumoColaboradorModal from '../components/ResumoColaboradorModal';
+import RecebimentoModal from '../components/RecebimentoModal';
+import ReconProcessoModal from '../components/ReconProcessoModal';
+import EstadoModal from '../components/EstadoModal';
 
 const { TabPane } = Tabs;
 const { Search } = Input;
 const { Option } = Select;
+
+// Abas de debug que devem ser ocultas
+const ABAS_OCULTAS = ['VALIDACAO', 'DEBUG_RECEBIMENTOS_RAW', 'DEBUG_ENV', 'DEBUG_ANALISE_INFO', 'DEBUG_ANALISE_SAMPLE'];
 
 // Glossário de colunas (simplificado - pode ser expandido)
 const GLOSSARIO = {
@@ -65,15 +72,15 @@ const ResultadosPage = () => {
   const [sortConfig, setSortConfig] = useState({ sortBy: null, sortOrder: null });
   const [filtrosAtivos, setFiltrosAtivos] = useState({});
   const [valoresUnicosCache, setValoresUnicosCache] = useState({});
-  const [drawerVisible, setDrawerVisible] = useState(false);
-  const [registroSelecionado, setRegistroSelecionado] = useState(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalData, setModalData] = useState(null);
   const [presetAtivo, setPresetAtivo] = useState(null);
   const [colunasVisiveis, setColunasVisiveis] = useState(null);
 
   const carregarAbas = useCallback(async () => {
     try {
       const response = await resultadosAPI.listarAbas();
-      const abasList = response.data.abas || [];
+      const abasList = (response.data.abas || []).filter(aba => !ABAS_OCULTAS.includes(aba));
       setAbas(abasList);
       if (abasList.length > 0 && !abaAtiva) {
         setAbaAtiva(abasList[0]);
@@ -214,9 +221,31 @@ const ResultadosPage = () => {
     }
   }, [colunas]);
 
-  const handleVerDetalhes = (record) => {
-    setRegistroSelecionado(record);
-    setDrawerVisible(true);
+  const handleDetalhesClick = (record) => {
+    setModalData(record);
+    setModalVisible(true);
+  };
+
+  const abaAtivaKey = (abaAtiva || '').toString().trim().toUpperCase();
+  const renderModalContent = () => {
+    if (!modalData) return null;
+    switch (abaAtivaKey) {
+      case 'COMISSOES_CALCULADAS':
+        return <DetalhesCalculoModal rowData={modalData} />;
+      case 'RESUMO_COLABORADOR':
+        return <ResumoColaboradorModal rowData={modalData} />;
+      case 'COMISSOES_RECEBIMENTO':
+        return <RecebimentoModal rowData={modalData} />;
+      case 'RECONCILIACAO':
+        if (modalData && modalData.SALDO_FINAL_RECONCILIACAO !== undefined) {
+          return <ReconProcessoModal rowData={modalData} />;
+        }
+        return <DetalhesCalculoModal rowData={modalData} isHistorico={true} />;
+      case 'ESTADO':
+        return <EstadoModal rowData={modalData} />;
+      default:
+        return null;
+    }
   };
 
   const handleBaixarExcel = async () => {
@@ -326,7 +355,7 @@ const ResultadosPage = () => {
     return FilterDropdownComponent;
   };
 
-  const colunasTabela = (colunasVisiveis || colunas).map((col) => {
+  const colunasTabela = (colunasVisiveis || colunas).filter(col => col !== 'id_colaborador').map((col) => {
     const temGlossario = GLOSSARIO[col.toLowerCase()];
 
     return {
@@ -356,6 +385,10 @@ const ResultadosPage = () => {
         return value.includes(String(record[col] || ''));
       },
       render: (text) => {
+        // Coluna 'processo' não deve ser formatada como monetário
+        if (col === 'processo') {
+          return text || '-';
+        }
         // Formatação para valores numéricos
         if (typeof text === 'number' || (typeof text === 'string' && !isNaN(text) && text !== '')) {
           const num = parseFloat(text);
@@ -381,7 +414,7 @@ const ResultadosPage = () => {
       <Button
         type="link"
         icon={<EyeOutlined />}
-        onClick={() => handleVerDetalhes(record)}
+        onClick={() => handleDetalhesClick(record)}
         size="small"
       >
         Detalhes
@@ -464,40 +497,16 @@ const ResultadosPage = () => {
         </Tabs>
       </Card>
 
-      <Drawer
-        title="Detalhes do Item"
-        placement="right"
-        width={600}
-        onClose={() => setDrawerVisible(false)}
-        open={drawerVisible}
+      <Modal
+        title="Detalhes"
+        open={modalVisible}
+        onCancel={() => setModalVisible(false)}
+        footer={null}
+        width={860}
+        destroyOnClose
       >
-        {registroSelecionado && (
-          <Descriptions column={1} bordered>
-            {Object.entries(registroSelecionado).map(([key, value]) => (
-              <Descriptions.Item
-                key={key}
-                label={
-                  <Space>
-                    {key}
-                    {GLOSSARIO[key.toLowerCase()] && (
-                      <Tooltip title={GLOSSARIO[key.toLowerCase()]}>
-                        <QuestionCircleOutlined style={{ color: '#1890ff' }} />
-                      </Tooltip>
-                    )}
-                  </Space>
-                }
-              >
-                {typeof value === 'number' || (typeof value === 'string' && !isNaN(value) && value !== '')
-                  ? parseFloat(value).toLocaleString('pt-BR', {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })
-                  : value || '-'}
-              </Descriptions.Item>
-            ))}
-          </Descriptions>
-        )}
-      </Drawer>
+        {renderModalContent()}
+      </Modal>
     </div>
   );
 };

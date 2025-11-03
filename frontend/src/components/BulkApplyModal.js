@@ -15,7 +15,7 @@ import { regrasAPI } from '../services/api';
 const { Step } = Steps;
 const { Option } = Select;
 
-const BulkApplyModal = ({ visible, onCancel, onConfirm, abaNome, dados = [], colunas = [] }) => {
+const BulkApplyModal = ({ open, onCancel, onConfirm, abaNome, dados = [], colunas = [] }) => {
   const [form] = Form.useForm();
   const [currentStep, setCurrentStep] = useState(0);
   const [previewData, setPreviewData] = useState([]);
@@ -52,12 +52,12 @@ const BulkApplyModal = ({ visible, onCancel, onConfirm, abaNome, dados = [], col
     try {
       const response = await regrasAPI.lerAba(abaNome, { allPages: true });
       setDadosCompletos(response.data.data || []);
-      
+
       // Pre-carregar valores únicos das colunas de escopo
       const colunasEscopo = ['linha', 'grupo', 'subgrupo', 'tipo_mercadoria'].filter(
         (col) => colunas.includes(col)
       );
-      
+
       for (const col of colunasEscopo) {
         await obterValoresUnicos(col);
       }
@@ -67,17 +67,18 @@ const BulkApplyModal = ({ visible, onCancel, onConfirm, abaNome, dados = [], col
   }, [abaNome, colunas, obterValoresUnicos]);
 
   useEffect(() => {
-    if (!visible) {
+    if (!open) {
       form.resetFields();
       setCurrentStep(0);
       setPreviewData([]);
       setValoresUnicosCache({});
       setDadosCompletos([]);
-    } else {
+    } else if (abaNome) {
       // Carregar dados completos ao abrir o modal
       carregarDadosCompletos();
     }
-  }, [visible, form, abaNome, carregarDadosCompletos]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, abaNome]);
 
   const handlePreview = async () => {
     try {
@@ -129,7 +130,7 @@ const BulkApplyModal = ({ visible, onCancel, onConfirm, abaNome, dados = [], col
   // Obter valores únicos filtrados baseado nos outros filtros selecionados
   const getValoresFiltrados = useCallback((coluna) => {
     const valoresEscopo = form.getFieldValue('escopo') || {};
-    
+
     // Se não há filtros selecionados, retornar todos os valores únicos
     const temFiltros = Object.values(valoresEscopo).some(v => v && v.length > 0);
     if (!temFiltros) {
@@ -139,7 +140,7 @@ const BulkApplyModal = ({ visible, onCancel, onConfirm, abaNome, dados = [], col
 
     // Filtrar dados completos baseado nos outros filtros
     let dadosFiltrados = [...dadosCompletos];
-    
+
     Object.keys(valoresEscopo).forEach((key) => {
       if (key !== coluna && valoresEscopo[key] && valoresEscopo[key].length > 0) {
         dadosFiltrados = dadosFiltrados.filter((item) =>
@@ -169,7 +170,7 @@ const BulkApplyModal = ({ visible, onCancel, onConfirm, abaNome, dados = [], col
   return (
     <Modal
       title="Aplicar Alterações em Massa"
-      visible={visible}
+      open={open}
       onCancel={onCancel}
       width={800}
       footer={null}
@@ -199,6 +200,9 @@ const BulkApplyModal = ({ visible, onCancel, onConfirm, abaNome, dados = [], col
                         showSearch
                         allowClear
                         value={valoresSelecionados}
+                        onChange={(values) => {
+                          form.setFieldValue(['escopo', col], values);
+                        }}
                         filterOption={(input, option) =>
                           String(option?.children || '').toLowerCase().includes(input.toLowerCase())
                         }

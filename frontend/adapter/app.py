@@ -234,7 +234,8 @@ async def obter_valores_unicos(nome_aba: str, coluna: str):
 
     if coluna not in df.columns:
         raise HTTPException(
-            status_code=404, detail=f"Coluna '{coluna}' não encontrada na aba '{nome_aba}'"
+            status_code=404,
+            detail=f"Coluna '{coluna}' não encontrada na aba '{nome_aba}'",
         )
 
     # Extrair valores únicos, remover NaN e valores vazios, converter para string e ordenar
@@ -347,6 +348,282 @@ async def aplicar_massa_regras(nome_aba: str, request: BulkApplyRequest):
         return {"success": True, "total_afetadas": len(df_filtered)}
 
 
+# ==================== ENDPOINTS - GERENCIAMENTO DE REGRAS (PESOS_METAS / CONFIG_COMISSAO) ====================
+
+
+@app.get("/api/regras/pesos-metas")
+async def api_get_pesos_metas():
+    """Retorna dados da planilha PESOS_METAS como JSON."""
+    regras_path = get_regras_path()
+    if not Path(regras_path).exists():
+        raise HTTPException(
+            status_code=404, detail="Arquivo Regras_Comissoes.xlsx não encontrado"
+        )
+
+    try:
+        df = read_excel_sheet(regras_path, "PESOS_METAS")
+        # Normalizar NaN -> ""
+        df = df.fillna("")
+        return df.to_dict(orient="records")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Erro ao ler PESOS_METAS: {str(e)}"
+        )
+
+
+"""
+Nota: Em Pydantic v2, modelos root devem usar RootModel.
+Para simplificar e evitar dependência de RootModel, aceitamos diretamente
+List[Dict[str, Any]] no endpoint abaixo.
+"""
+
+
+@app.post("/api/regras/pesos-metas")
+async def api_update_pesos_metas(payload: List[Dict[str, Any]]):
+    """Atualiza a planilha PESOS_METAS.
+    Validação: soma horizontal dos componentes deve ser ~100.
+    """
+    regras_path = get_regras_path()
+    registros = payload
+
+    if not isinstance(registros, list) or not registros:
+        raise HTTPException(status_code=400, detail="Payload inválido")
+
+    df = pd.DataFrame(registros)
+
+    # Componentes padrão conhecidos (presentes ou não)
+    componentes = [
+        "faturamento_linha",
+        "conversao_linha",
+        "rentabilidade",
+        "faturamento_individual",
+        "conversao_individual",
+        "retencao_clientes",
+        "meta_fornecedor_1",
+        "meta_fornecedor_2",
+    ]
+
+    # Converter colunas de componentes para numérico quando existirem
+    for col in componentes:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # Validar soma horizontal ~ 100 (tolerância 0.1)
+    if any(col in df.columns for col in componentes):
+        presentes = [c for c in componentes if c in df.columns]
+        somas = df[presentes].sum(axis=1)
+        tolerancia = 0.1
+        invalidas = (~((somas >= 100 - tolerancia) & (somas <= 100 + tolerancia))).any()
+        if invalidas:
+            raise HTTPException(
+                status_code=400, detail="Soma de pesos por cargo deve ser 100% (±0.1)"
+            )
+
+    try:
+        write_excel_sheet(Path(regras_path), "PESOS_METAS", df, preserve_order=True)
+        return {"success": True, "message": "PESOS_METAS atualizado."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Erro ao salvar PESOS_METAS: {str(e)}"
+        )
+
+
+def _read_config_comissao_df() -> pd.DataFrame:
+    regras_path = get_regras_path()
+    if not Path(regras_path).exists():
+        raise HTTPException(
+            status_code=404, detail="Arquivo Regras_Comissoes.xlsx não encontrado"
+        )
+    return read_excel_sheet(regras_path, "CONFIG_COMISSAO").fillna("")
+
+
+@app.get("/api/regras/config-comissao/context-options")
+async def api_get_config_context_options():
+    df = _read_config_comissao_df()
+
+    def uniq(col: str) -> List[str]:
+        return (
+            sorted(
+                pd.Series(df[col])
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .replace("", pd.NA)
+                .dropna()
+                .unique()
+                .tolist()
+            )
+            if col in df.columns
+            else []
+        )
+
+    return {
+        "linha": uniq("linha"),
+        "grupo": uniq("grupo"),
+        "subgrupo": uniq("subgrupo"),
+        "tipo_mercadoria": uniq("tipo_mercadoria"),
+        "cargo": uniq("cargo"),
+    }
+
+
+@app.post("/api/regras/config-comissao/query")
+async def api_query_config_comissao(filters: Dict[str, Any]):
+    df = _read_config_comissao_df()
+    query = df.copy()
+    for key, value in (filters or {}).items():
+        if value and value != "Todos" and key in query.columns:
+            query = query[query[key].astype(str).str.strip() == str(value).strip()]
+    return query.to_dict(orient="records")
+
+
+@app.put("/api/regras/config-comissao/update-line")
+async def api_update_config_comissao_line(rowData: Dict[str, Any]):
+    """Atualiza uma linha com base no contexto (chaves) e campos editáveis.
+    Campos alvo: taxa_rateio_maximo_pct, fatia_cargo_pct
+    """
+    df = _read_config_comissao_df()
+    regras_path = get_regras_path()
+
+    # Determinar chaves de contexto para identificação
+    keys_ctx = ["linha", "grupo", "subgrupo", "tipo_mercadoria", "cargo"]
+    mask = pd.Series([True] * len(df))
+    for k in keys_ctx:
+        if k in rowData and rowData[k] not in (None, "") and k in df.columns:
+            mask = mask & (df[k].astype(str).str.strip() == str(rowData[k]).strip())
+
+    if mask.sum() == 0:
+        raise HTTPException(
+            status_code=404, detail="Nenhuma linha encontrada para atualização"
+        )
+
+    # Aplicar atualizações se presentes
+    if "taxa_rateio_maximo_pct" in rowData and "taxa_rateio_maximo_pct" in df.columns:
+        df.loc[mask, "taxa_rateio_maximo_pct"] = pd.to_numeric(
+            rowData["taxa_rateio_maximo_pct"], errors="coerce"
+        ).fillna(0)
+    if "fatia_cargo_pct" in rowData and "fatia_cargo_pct" in df.columns:
+        df.loc[mask, "fatia_cargo_pct"] = pd.to_numeric(
+            rowData["fatia_cargo_pct"], errors="coerce"
+        ).fillna(0)
+
+    try:
+        write_excel_sheet(Path(regras_path), "CONFIG_COMISSAO", df, preserve_order=True)
+        return {"success": True, "linhas_atualizadas": int(mask.sum())}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Erro ao salvar CONFIG_COMISSAO: {str(e)}"
+        )
+
+
+class BatchActionItem(BaseModel):
+    valor: float
+
+
+class BatchAction(BaseModel):
+    taxa_rateio_maximo_pct: Optional[BatchActionItem] = None
+    fatia_cargo_pct: Optional[BatchActionItem] = None
+
+
+class BatchRequest(BaseModel):
+    escopo: Dict[str, Any] = {}
+    acao: BatchAction
+
+
+def _apply_batch_logic(
+    df: pd.DataFrame, batch_data: Dict[str, Any]
+) -> (pd.DataFrame, int):
+    escopo = (batch_data or {}).get("escopo", {})
+    acao = (batch_data or {}).get("acao", {})
+
+    query = df.copy()
+    for key, value in (escopo or {}).items():
+        if value and value != "Todos" and key in query.columns:
+            query = query[query[key].astype(str).str.strip() == str(value).strip()]
+
+    idx = query.index
+    df_mod = df.copy()
+
+    if isinstance(acao, dict):
+        if (
+            acao.get("taxa_rateio_maximo_pct") is not None
+            and "taxa_rateio_maximo_pct" in df_mod.columns
+        ):
+            val = float(acao["taxa_rateio_maximo_pct"].get("valor"))
+            df_mod.loc[idx, "taxa_rateio_maximo_pct"] = val
+        if (
+            acao.get("fatia_cargo_pct") is not None
+            and "fatia_cargo_pct" in df_mod.columns
+        ):
+            val = float(acao["fatia_cargo_pct"].get("valor"))
+            df_mod.loc[idx, "fatia_cargo_pct"] = val
+
+    return df_mod, len(idx)
+
+
+@app.post("/api/regras/config-comissao/dry-run")
+async def api_dry_run_config_comissao(batch: BatchRequest):
+    df = _read_config_comissao_df()
+    df_mod, afetadas = _apply_batch_logic(df, batch.dict())
+    return {"linhas_afetadas": int(afetadas)}
+
+
+@app.post("/api/regras/config-comissao/apply-batch")
+async def api_apply_batch_config_comissao(batch: BatchRequest):
+    df = _read_config_comissao_df()
+    regras_path = get_regras_path()
+    df_mod, afetadas = _apply_batch_logic(df, batch.dict())
+    try:
+        write_excel_sheet(
+            Path(regras_path), "CONFIG_COMISSAO", df_mod, preserve_order=True
+        )
+        return {"success": True, "message": f"{afetadas} regras atualizadas."}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Erro ao salvar CONFIG_COMISSAO: {str(e)}"
+        )
+
+
+@app.post("/api/regras/config-comissao/validate-pe")
+async def api_validate_config_comissao_pe(contexto: Dict[str, Any]):
+    df = _read_config_comissao_df()
+    query = df.copy()
+    for key, value in (contexto or {}).items():
+        if value is None:
+            continue
+        if key in query.columns:
+            if value == "":
+                query = query[query[key].astype(str).str.strip() == ""]
+            else:
+                query = query[query[key].astype(str).str.strip() == str(value).strip()]
+
+    if query.empty:
+        return {
+            "soma_pe": 0,
+            "status": "vazio",
+            "message": "Nenhuma regra encontrada para este contexto exato.",
+        }
+
+    if "fatia_cargo_pct" not in query.columns:
+        raise HTTPException(
+            status_code=400, detail="Coluna 'fatia_cargo_pct' não encontrada"
+        )
+
+    soma = pd.to_numeric(query["fatia_cargo_pct"], errors="coerce").fillna(0).sum()
+    soma = round(float(soma), 2)
+    if abs(soma - 100.0) < 0.01:
+        return {"soma_pe": soma, "status": "ok", "message": f"Soma correta: {soma}%"}
+    else:
+        return {
+            "soma_pe": soma,
+            "status": "erro",
+            "message": f"Erro de soma: {soma}%. (Esperado: 100%)",
+        }
+
+
 # ==================== ENDPOINTS - UPLOADS ====================
 
 
@@ -443,55 +720,57 @@ FASES_CALCULO = [
 async def monitorar_processo(
     job_id: str, process: subprocess.Popen, mes: int, ano: int
 ):
-    """Monitora processo em background e atualiza progress.json"""
-    fase_atual = 0
-    inicio_tempo = datetime.now()
-    mensagens = []
+    """Monitora processo em background e garante status final."""
 
     try:
-        # Ler stdout/stderr do processo
         while process.poll() is None:
-            # Atualizar progresso baseado no tempo decorrido e fases esperadas
-            tempo_decorrido = (datetime.now() - inicio_tempo).total_seconds()
+            await asyncio.sleep(2)
 
-            # Estimar fase baseado no tempo (aproximação)
-            if tempo_decorrido < 5:
-                fase_atual = 0
-            elif tempo_decorrido < 15:
-                fase_atual = 1
-            elif tempo_decorrido < 30:
-                fase_atual = 2
-            elif tempo_decorrido < 60:
-                fase_atual = 3
-            elif tempo_decorrido < 120:
-                fase_atual = 4
-            elif tempo_decorrido < 300:
-                fase_atual = 5
-            else:
-                fase_atual = min(
-                    6, fase_atual + 1 if tempo_decorrido % 30 < 5 else fase_atual
-                )
+        return_code = process.returncode
 
-            etapa, percent = FASES_CALCULO[min(fase_atual, len(FASES_CALCULO) - 1)]
-
-            # Tentar ler linhas do stdout (não bloqueante - apenas verificar se há dados)
-            # No Windows, stdout.readline() bloqueia, então apenas verificamos ao final
-            try:
-                # Verificar se processo ainda está rodando (poll retorna None se estiver)
-                if process.poll() is not None:
-                    # Processo terminou, ler saída completa
-                    break
-            except Exception:
-                pass
-
-            # Atualizar progress.json
+        # Consolidar status final sem sobrescrever o que o processo gerou
+        try:
+            with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
+                progress_data = json.load(f)
+        except Exception:
             progress_data = {
                 "job_id": job_id,
-                "percent": percent,
-                "etapa": etapa,
-                "mensagens": mensagens[-10:],  # Últimas 10 mensagens
+                "percent": 0,
+                "etapa": "",
+                "mensagens": [],
                 "status": "em_andamento",
             }
+
+        if progress_data.get("job_id") != job_id:
+            progress_data.update(
+                {
+                    "job_id": job_id,
+                    "percent": 0,
+                    "etapa": "",
+                    "mensagens": [],
+                    "status": "em_andamento",
+                }
+            )
+
+        if progress_data.get("status") not in ("concluido", "erro"):
+            if return_code == 0:
+                resultado_path = get_resultado_path()
+                etapa_final = "Concluído" if resultado_path else "Processo finalizado"
+                progress_data.update(
+                    {
+                        "etapa": etapa_final,
+                        "percent": 100,
+                        "status": "concluido",
+                    }
+                )
+            else:
+                progress_data.update(
+                    {
+                        "etapa": f"Processo finalizado (código: {return_code})",
+                        "status": "erro",
+                        "percent": 100,
+                    }
+                )
 
             try:
                 with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
@@ -499,54 +778,7 @@ async def monitorar_processo(
             except Exception:
                 pass
 
-            await asyncio.sleep(2)  # Atualizar a cada 2 segundos
-
-        # Processo terminou
-        return_code = process.returncode
-
-        # Não há stdout/stderr para ler pois usamos DEVNULL
-        # O código de retorno já indica sucesso ou erro
-
-        # Verificar se arquivo de resultado foi gerado
-        resultado_path = get_resultado_path()
-
-        if return_code == 0 and resultado_path:
-            status_final = "concluido"
-            etapa_final = "Concluído"
-            percent_final = 100
-        else:
-            status_final = "erro" if return_code != 0 else "concluido"
-            etapa_final = f"Processo finalizado (código: {return_code})"
-            percent_final = 100
-
-        # Atualizar progress.json final
-        progress_data = {
-            "job_id": job_id,
-            "percent": percent_final,
-            "etapa": etapa_final,
-            "mensagens": mensagens[-20:],
-            "status": status_final,
-        }
-
-        with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
-            json.dump(progress_data, f, ensure_ascii=False)
-
-    except Exception as e:
-        # Em caso de erro no monitoramento
-        progress_data = {
-            "job_id": job_id,
-            "percent": 0,
-            "etapa": f"Erro no monitoramento: {str(e)}",
-            "mensagens": mensagens[-10:],
-            "status": "erro",
-        }
-        try:
-            with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
-                json.dump(progress_data, f, ensure_ascii=False)
-        except Exception:
-            pass
     finally:
-        # Remover do dicionário de processos ativos
         processos_ativos.pop(job_id, None)
 
 
@@ -579,12 +811,17 @@ async def iniciar_calculo(
     # Iniciar processo em background com parâmetros mes/ano
     # Redirecionar stdout/stderr para DEVNULL para evitar bloqueio por buffers cheios
     # O processo não ficará bloqueado esperando que alguém leia os pipes
+    env = os.environ.copy()
+    env["COMISSOES_JOB_ID"] = job_id
+    env["COMISSOES_PROGRESS_FILE"] = PROGRESS_FILE
+
     process = subprocess.Popen(
         [sys.executable, str(script_path), "--mes", str(mes), "--ano", str(ano)],
         cwd=str(ROBO_ROOT_PATH),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        env=env,
     )
 
     # Armazenar processo ativo
@@ -718,7 +955,8 @@ async def obter_valores_unicos_resultado(nome_aba: str, coluna: str):
 
     if coluna not in df.columns:
         raise HTTPException(
-            status_code=404, detail=f"Coluna '{coluna}' não encontrada na aba '{nome_aba}'"
+            status_code=404,
+            detail=f"Coluna '{coluna}' não encontrada na aba '{nome_aba}'",
         )
 
     # Extrair valores únicos, remover NaN e valores vazios, converter para string e ordenar

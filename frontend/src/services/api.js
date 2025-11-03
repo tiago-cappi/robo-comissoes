@@ -61,6 +61,17 @@ export const regrasAPI = {
   
   aplicarMassa: (nomeAba, request) =>
     api.post(`/regras/aba/${nomeAba}/apply-bulk`, request),
+
+  // ===== Gerenciamento de Regras =====
+  getPesosMetas: () => api.get('/api/regras/pesos-metas'),
+  updatePesosMetas: (data) => api.post('/api/regras/pesos-metas', data),
+
+  getRuleContextOptions: () => api.get('/api/regras/config-comissao/context-options'),
+  getConfigComissao: (filters) => api.post('/api/regras/config-comissao/query', filters || {}),
+  updateConfigComissaoInLine: (rowData) => api.put('/api/regras/config-comissao/update-line', rowData),
+  dryRunConfigComissao: (batchData) => api.post('/api/regras/config-comissao/dry-run', batchData),
+  applyBatchConfigComissao: (batchData) => api.post('/api/regras/config-comissao/apply-batch', batchData),
+  validateConfigComissaoPE: (contexto) => api.post('/api/regras/config-comissao/validate-pe', contexto),
 };
 
 // ==================== UPLOADS ====================
