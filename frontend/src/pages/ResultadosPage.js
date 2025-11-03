@@ -63,6 +63,7 @@ const ResultadosPage = () => {
     total: 0,
   });
   const [sortConfig, setSortConfig] = useState({ sortBy: null, sortOrder: null });
+  const [filtrosAtivos, setFiltrosAtivos] = useState({});
   const [valoresUnicosCache, setValoresUnicosCache] = useState({});
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [registroSelecionado, setRegistroSelecionado] = useState(null);
@@ -87,11 +88,21 @@ const ResultadosPage = () => {
 
     setLoading(true);
     try {
+      // Converter filtros ativos em padrão de busca (OR) para o backend
+      const filtersParam = {};
+      Object.keys(filtrosAtivos).forEach((key) => {
+        const values = filtrosAtivos[key];
+        if (Array.isArray(values) && values.length > 0) {
+          filtersParam[key] = values.join('|');
+        }
+      });
+
       const params = {
         page: pagination.current,
         size: pagination.pageSize,
         sortBy: sortConfig.sortBy,
         sortOrder: sortConfig.sortOrder,
+        filters: Object.keys(filtersParam).length > 0 ? filtersParam : undefined,
       };
 
       const response = await resultadosAPI.lerAba(abaAtiva, params);
@@ -106,7 +117,7 @@ const ResultadosPage = () => {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [abaAtiva, pagination.current, pagination.pageSize, sortConfig.sortBy, sortConfig.sortOrder]);
+  }, [abaAtiva, pagination.current, pagination.pageSize, sortConfig.sortBy, sortConfig.sortOrder, filtrosAtivos]);
 
   useEffect(() => {
     carregarAbas();
@@ -144,6 +155,20 @@ const ResultadosPage = () => {
     } else {
       setSortConfig({ sortBy: null, sortOrder: null });
     }
+
+    // Atualizar filtros ativos e resetar para a primeira página quando mudarem
+    const novosFiltros = {};
+    Object.keys(filters || {}).forEach((key) => {
+      if (filters[key] && filters[key].length > 0) {
+        novosFiltros[key] = filters[key];
+      }
+    });
+
+    const filtrosMudaram = JSON.stringify(novosFiltros) !== JSON.stringify(filtrosAtivos);
+    if (filtrosMudaram) {
+      setPagination((prev) => ({ ...prev, current: 1 }));
+    }
+    setFiltrosAtivos(novosFiltros);
   };
 
   const obterValoresUnicos = useCallback(async (coluna) => {
