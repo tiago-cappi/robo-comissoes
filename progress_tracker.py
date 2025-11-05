@@ -153,3 +153,4 @@ def step_timer(tracker: Optional[ProgressTracker], etapa: str, weight: float):
             add_percent=weight,
             message=f"[{etapa}] tempo={elapsed_ms:.0f}ms",
         )
+

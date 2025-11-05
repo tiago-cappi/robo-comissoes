@@ -1,0 +1,88 @@
+2025-11-05 13:05:04,349 | INFO | Root: C:\Users\m.rafael\Desktop\projetos\robo-comissoes
+2025-11-05 13:05:04,349 | INFO | Executando para 11/2025
+2025-11-05 13:05:04,350 | INFO | OK arquivo base: Analise_Comercial_Completa.xlsx (9392 bytes)
+2025-11-05 13:05:04,350 | INFO | OK arquivo base: fin_adcli_pg_m3.xls (37888 bytes)
+2025-11-05 13:05:04,351 | INFO | OK arquivo base: fin_conci_adcli_m3.xls (38400 bytes)
+2025-11-05 13:05:04,351 | INFO | OK arquivo base: Análise Financeira.xlsx (9849 bytes)
+2025-11-05 13:05:06,527 | INFO | [1/4] Executando preparador de dados para 11/2025...
+2025-11-05 13:05:07,260 | INFO | Preparador concluído em 0.7s
+2025-11-05 13:05:07,266 | INFO | [2/4] Carregando e pré-processando dados...
+2025-11-05 13:05:08,653 | INFO | [3/4] Rodando detecção de cross-selling...
+2025-11-05 13:05:08,661 | INFO | Casos de cross-selling detectados: 0
+2025-11-05 13:05:08,661 | INFO | [4/4] Executando cálculo de comissões...
+2025-11-05 13:05:10,131 | ERROR | ERRO FATAL: 'RENTABILIDADE_REALIZADA'
+2025-11-05 13:05:10,137 | ERROR | Traceback (most recent call last):
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\scripts\run_commissions_test.py", line 122, in main
+    run_execucao(calc, decisoes=None, log=log)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\scripts\run_commissions_test.py", line 79, in run_execucao
+    calc.executar(decisoes_cross_selling=decisoes or [])
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\calculo_comissoes.py", line 4070, in executar
+    self._calcular_realizado()
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\calculo_comissoes.py", line 1018, in _calcular_realizado
+    rent_realizada = self.data["RENTABILIDADE_REALIZADA"].rename(
+                     ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyError: 'RENTABILIDADE_REALIZADA'
+
+2025-11-05 13:05:25,830 | INFO | Root: C:\Users\m.rafael\Desktop\projetos\robo-comissoes
+2025-11-05 13:05:25,831 | INFO | Executando para 9/2025
+2025-11-05 13:05:25,831 | INFO | OK arquivo base: Analise_Comercial_Completa.xlsx (9392 bytes)
+2025-11-05 13:05:25,832 | INFO | OK arquivo base: fin_adcli_pg_m3.xls (37888 bytes)
+2025-11-05 13:05:25,832 | INFO | OK arquivo base: fin_conci_adcli_m3.xls (38400 bytes)
+2025-11-05 13:05:25,833 | INFO | OK arquivo base: Análise Financeira.xlsx (9849 bytes)
+2025-11-05 13:05:27,036 | INFO | [1/4] Executando preparador de dados para 9/2025...
+2025-11-05 13:05:27,194 | INFO | Preparador concluído em 0.2s
+2025-11-05 13:05:27,197 | INFO | [2/4] Carregando e pré-processando dados...
+2025-11-05 13:05:27,809 | INFO | [3/4] Rodando detecção de cross-selling...
+2025-11-05 13:05:27,811 | INFO | Casos de cross-selling detectados: 0
+2025-11-05 13:05:27,811 | INFO | [4/4] Executando cálculo de comissões...
+2025-11-05 13:05:28,473 | ERROR | ERRO FATAL: 'RENTABILIDADE_REALIZADA'
+2025-11-05 13:05:28,476 | ERROR | Traceback (most recent call last):
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\scripts\run_commissions_test.py", line 122, in main
+    run_execucao(calc, decisoes=None, log=log)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\scripts\run_commissions_test.py", line 79, in run_execucao
+    calc.executar(decisoes_cross_selling=decisoes or [])
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\calculo_comissoes.py", line 4070, in executar
+    self._calcular_realizado()
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\calculo_comissoes.py", line 1018, in _calcular_realizado
+    rent_realizada = self.data["RENTABILIDADE_REALIZADA"].rename(
+                     ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyError: 'RENTABILIDADE_REALIZADA'
+
+2025-11-05 13:48:55,442 | INFO | Root: C:\Users\m.rafael\Desktop\projetos\robo-comissoes
+2025-11-05 13:48:55,443 | INFO | Executando para 9/2025
+2025-11-05 13:48:55,443 | INFO | OK arquivo base: Analise_Comercial_Completa.xlsx (9392 bytes)
+2025-11-05 13:48:55,443 | INFO | OK arquivo base: fin_adcli_pg_m3.xls (37888 bytes)
+2025-11-05 13:48:55,444 | INFO | OK arquivo base: fin_conci_adcli_m3.xls (38400 bytes)
+2025-11-05 13:48:55,444 | INFO | OK arquivo base: Análise Financeira.xlsx (9849 bytes)
+2025-11-05 13:48:56,297 | INFO | [1/4] Executando preparador de dados para 9/2025...
+2025-11-05 13:48:56,498 | INFO | Preparador concluído em 0.2s
+2025-11-05 13:48:56,500 | INFO | Usando arquivo de rentabilidade: C:\Users\m.rafael\Desktop\projetos\robo-comissoes\rentabilidades\rentabilidade_09_2025_agrupada.xlsx
+2025-11-05 13:48:56,502 | INFO | [2/4] Carregando e pré-processando dados...
+2025-11-05 13:48:57,159 | INFO | [3/4] Rodando detecção de cross-selling...
+2025-11-05 13:48:57,166 | INFO | Casos de cross-selling detectados: 1
+2025-11-05 13:48:57,166 | INFO |   01) processo=CS-Test consultor=Mateus Machado linha=SSO taxa=1.0
+2025-11-05 13:48:57,166 | INFO | [4/4] Executando cálculo de comissões...
+2025-11-05 14:59:45,305 | INFO | Root: C:\Users\m.rafael\Desktop\projetos\robo-comissoes
+2025-11-05 14:59:45,307 | INFO | Executando para 9/2025
+2025-11-05 14:59:45,311 | INFO | OK arquivo base: Analise_Comercial_Completa.xlsx (9392 bytes)
+2025-11-05 14:59:45,312 | INFO | OK arquivo base: fin_adcli_pg_m3.xls (37888 bytes)
+2025-11-05 14:59:45,313 | INFO | OK arquivo base: fin_conci_adcli_m3.xls (38400 bytes)
+2025-11-05 14:59:45,313 | INFO | OK arquivo base: Análise Financeira.xlsx (9849 bytes)
+2025-11-05 14:59:45,314 | INFO | [1/4] Executando preparador de dados para 9/2025...
+2025-11-05 14:59:48,680 | INFO | Preparador concluído em 1.2s
+2025-11-05 14:59:49,725 | INFO | Usando arquivo de rentabilidade: C:\Users\m.rafael\Desktop\projetos\robo-comissoes\rentabilidades\rentabilidade_09_2025_agrupada.xlsx
+2025-11-05 14:59:49,727 | INFO | [2/4] Carregando e pré-processando dados...
+2025-11-05 14:59:50,545 | INFO | [3/4] Rodando detecção de cross-selling...
+2025-11-05 14:59:50,553 | INFO | Casos de cross-selling detectados: 1
+2025-11-05 14:59:50,553 | INFO |   01) processo=CS-Test consultor=Mateus Machado linha=SSO taxa=1.0
+2025-11-05 14:59:50,554 | INFO | Preparando 1 decisões com Opção A (padrão)...
+2025-11-05 14:59:50,554 | INFO | [4/4] Executando cálculo de comissões...
+2025-11-05 15:02:05,215 | INFO | Cálculo concluído em 134.7s
+2025-11-05 15:02:05,217 | INFO | Arquivo de saída gerado: Comissoes_Calculadas_20251105_145949.xlsx
+2025-11-05 15:02:05,217 | INFO | Execução finalizada com sucesso.

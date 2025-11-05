@@ -1,3 +1,4 @@
 ﻿Processo,Dt Emissão,Data Aceite,Valor Realizado,Negócio,Grupo,Subgrupo,Tipo de Mercadoria,Consultor Interno,Código Produto,Descrição Produto,Representante-pedido,Status Processo,Operação,Valor Orçado,Fabricante,Gerente Comercial-Pedido,Cliente,Numero NF
 999999,2025-09-15 00:00:00,2025-09-15 00:00:00,100,SSO,Detector Portátil,MicroClip,Produto,ANDREY.ANDRADE,HON-MCXL-BASE,Base Teste FC,ANDRÉ LUIS GONCALVES CAMARGO,FATURADO,PVEN,0,HON,,005309,048341
 999998,2025-09-15 00:00:00,2025-09-15 00:00:00,100,SSO,Detector Portátil,MicroClip,Produto,ANDREY.ANDRADE,HON-MCXL-BASE,Base Teste FC,ANDRÉ LUIS GONCALVES CAMARGO,FATURADO,PVEN,0,HON,,005309,048341
+CS-Test,2025-09-20 00:00:00,2025-09-20 00:00:00,100,SSO,Detector Portátil,Sensor,Reposição,ROSILENE,HON-SENS-CS,Teste Cross Selling,ANDRÉ LUIS GONCALVES CAMARGO,FATURADO,PVEN,100,HON,MATEUS BORRO MACHADO,Cliente CS,

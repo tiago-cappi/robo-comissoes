@@ -19,7 +19,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse
 from pydantic import BaseModel
 import aiofiles
 from dotenv import load_dotenv
@@ -45,7 +45,37 @@ else:
     # Garantir caminho absoluto
     ROBO_ROOT_PATH = str(Path(ROBO_ROOT_PATH).resolve())
 
+# Garantir que o caminho raiz do robô está no sys.path para imports diretos
+try:
+    if ROBO_ROOT_PATH not in sys.path:
+        sys.path.insert(0, ROBO_ROOT_PATH)
+except Exception:
+    pass
+
 PROGRESS_FILE = os.path.join(ROBO_ROOT_PATH, "progress.json")
+
+# ==================== LOGGING (Arquivo) ====================
+import logging
+from logging.handlers import RotatingFileHandler
+
+LOG_FILE = os.path.join(ROBO_ROOT_PATH, "adapter.log")
+
+try:
+    _root_logger = logging.getLogger()
+    _root_logger.setLevel(logging.INFO)
+    has_file_handler = any(
+        isinstance(h, RotatingFileHandler)
+        and getattr(h, "baseFilename", "").endswith("adapter.log")
+        for h in _root_logger.handlers
+    )
+    if not has_file_handler:
+        _fh = RotatingFileHandler(
+            LOG_FILE, maxBytes=1_000_000, backupCount=2, encoding="utf-8"
+        )
+        _fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+        _root_logger.addHandler(_fh)
+except Exception:
+    pass
 
 app = FastAPI(
     title="Adapter Robô de Comissões",
@@ -870,6 +900,253 @@ async def consultar_progresso(job_id: str):
             mensagens=[],
             status="erro",
         )
+
+
+"""
+Novos endpoints para fluxo de Cross-Selling:
+ - POST /api/executar-prescan: roda apenas a detecção e retorna casos
+ - POST /api/executar-calculo: executa o cálculo completo aceitando decisões
+"""
+
+
+class ExecPrescanRequest(BaseModel):
+    mes: int
+    ano: int
+
+
+class ExecCalculoRequest(BaseModel):
+    mes: int
+    ano: int
+    decisoes_cross_selling: Optional[List[Dict[str, Any]]] = None
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def _cwd(path: str):
+    old = os.getcwd()
+    try:
+        os.chdir(path)
+        yield
+    finally:
+        try:
+            os.chdir(old)
+        except Exception:
+            pass
+
+
+@app.post("/api/executar-prescan")
+async def executar_prescan(payload: ExecPrescanRequest):
+    import logging
+    import traceback
+
+    logger = logging.getLogger(__name__)
+
+    try:
+        logger.info(f"[PRESCAN] Iniciando pré-scan para {payload.mes}/{payload.ano}")
+
+        # Instanciar e carregar dados
+        from calculo_comissoes import CalculoComissao
+
+        with _cwd(ROBO_ROOT_PATH):
+            # Verificar se os arquivos já existem e são recentes (últimos 5 minutos)
+            # para evitar reexecutar o preparador desnecessariamente
+            # IMPORTANTE: Se o CSV não existir mas o XLSX existir, sempre executar o preparador para converter
+            arquivo_csv = Path("Analise_Comercial_Completa.csv")
+            arquivo_xlsx = Path("Analise_Comercial_Completa.xlsx")
+            precisa_converter = not arquivo_csv.exists() and arquivo_xlsx.exists()
+
+            arquivos_necessarios = [
+                Path("Faturados.xlsx"),
+                Path("Conversões.xlsx"),
+                Path("Faturados_YTD.xlsx"),
+            ]
+            arquivos_existem = all(f.exists() for f in arquivos_necessarios)
+            arquivos_recentes = False
+            if arquivos_existem:
+                import time
+
+                tempo_atual = time.time()
+                arquivos_recentes = all(
+                    (tempo_atual - f.stat().st_mtime) < 300  # 5 minutos
+                    for f in arquivos_necessarios
+                )
+
+            if arquivos_existem and arquivos_recentes and not precisa_converter:
+                logger.info(
+                    "[PRESCAN] Arquivos já existem e são recentes, pulando preparador"
+                )
+            else:
+                if precisa_converter:
+                    logger.info(
+                        "[PRESCAN] Arquivo XLSX detectado sem CSV correspondente, executando preparador para conversão"
+                    )
+                logger.info("[PRESCAN] Executando preparador de dados...")
+                # Preparar dados do mês/ano antes do pré-scan (necessário para popular FATURADOS etc.)
+                try:
+                    import preparar_dados_mensais
+
+                    preparar_dados_mensais.run_preparador(payload.mes, payload.ano)
+                    logger.info("[PRESCAN] Preparador concluído")
+                except Exception as e:
+                    logger.error(
+                        f"[PRESCAN] Erro no preparador: {e}\n{traceback.format_exc()}"
+                    )
+                    # Não abortar, mas registrar no detalhe do erro do endpoint se falhar
+                    raise HTTPException(
+                        status_code=500, detail=f"Falha no preparador: {e}"
+                    )
+
+            logger.info("[PRESCAN] Configurando caminhos de arquivos...")
+            # Ajustar caminhos como no CLI principal
+            try:
+                import calculo_comissoes as cc
+
+                cc.ARQUIVO_FATURADOS = "Faturados.xlsx"
+                cc.ARQUIVO_CONVERSOES = "Conversões.xlsx"
+                cc.ARQUIVO_FATURADOS_YTD = "Faturados_YTD.xlsx"
+                mm = str(payload.mes).zfill(2)
+                import glob as _glob
+
+                encontrados = _glob.glob(
+                    str(Path("rentabilidades") / f"*{mm}*{payload.ano}*agrupada*.xlsx")
+                )
+                if encontrados:
+                    cc.ARQUIVO_RENTABILIDADE = encontrados[0]
+                    logger.info(
+                        f"[PRESCAN] Arquivo de rentabilidade: {cc.ARQUIVO_RENTABILIDADE}"
+                    )
+                else:
+                    padrao = (
+                        Path("rentabilidades")
+                        / f"rentabilidade_{mm}_{payload.ano}_agrupada.xlsx"
+                    )
+                    if padrao.exists():
+                        cc.ARQUIVO_RENTABILIDADE = str(padrao)
+                        logger.info(
+                            f"[PRESCAN] Arquivo de rentabilidade: {cc.ARQUIVO_RENTABILIDADE}"
+                        )
+                    else:
+                        # Se não encontrou, deixar None (o código defensivo tratará)
+                        cc.ARQUIVO_RENTABILIDADE = None
+                        logger.warning(
+                            f"[PRESCAN] Arquivo de rentabilidade não encontrado para {mm}/{payload.ano}"
+                        )
+            except Exception as e:
+                logger.error(
+                    f"[PRESCAN] Erro ao configurar caminhos: {e}\n{traceback.format_exc()}"
+                )
+                # Se houver erro, garantir que None seja definido para evitar NameError
+                cc.ARQUIVO_RENTABILIDADE = None
+
+            logger.info("[PRESCAN] Instanciando CalculoComissao...")
+            calc = CalculoComissao()
+
+            logger.info("[PRESCAN] Carregando dados...")
+            # Carregar e pré-processar dados existentes
+            calc._carregar_dados()
+            logger.info("[PRESCAN] Pré-processando dados...")
+            calc._preprocessar_dados()
+
+            logger.info("[PRESCAN] Rodando detecção de cross-selling...")
+            # Rodar apenas detecção
+            calc._detectar_cross_selling()
+
+        casos = getattr(calc, "casos_cross_selling_detectados", []) or []
+        logger.info(f"[PRESCAN] Detecção concluída: {len(casos)} caso(s) encontrado(s)")
+
+        # Normalizar tipos simples
+        out = []
+        for c in casos:
+            out.append(
+                {
+                    "processo": str(c.get("processo")),
+                    "consultor": c.get("consultor"),
+                    "linha": c.get("linha"),
+                    "taxa": float(c.get("taxa", 0.0)),
+                }
+            )
+        logger.info(f"[PRESCAN] Retornando {len(out)} caso(s)")
+        return out
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[PRESCAN] Erro fatal: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Erro no pré-scan: {str(e)}")
+
+
+@app.post("/api/executar-calculo")
+async def executar_calculo(payload: ExecCalculoRequest):
+    try:
+        # Execução síncrona com decisões vindas da UI
+        from calculo_comissoes import CalculoComissao
+
+        with _cwd(ROBO_ROOT_PATH):
+            # Preparar dados do mês/ano antes da execução
+            try:
+                import preparar_dados_mensais
+
+                preparar_dados_mensais.run_preparador(payload.mes, payload.ano)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Falha no preparador: {e}")
+
+            # Ajustar caminhos como no CLI principal
+            try:
+                import calculo_comissoes as cc
+
+                cc.ARQUIVO_FATURADOS = "Faturados.xlsx"
+                cc.ARQUIVO_CONVERSOES = "Conversões.xlsx"
+                cc.ARQUIVO_FATURADOS_YTD = "Faturados_YTD.xlsx"
+                mm = str(payload.mes).zfill(2)
+                import glob as _glob
+
+                encontrados = _glob.glob(
+                    str(Path("rentabilidades") / f"*{mm}*{payload.ano}*agrupada*.xlsx")
+                )
+                if encontrados:
+                    cc.ARQUIVO_RENTABILIDADE = encontrados[0]
+                else:
+                    padrao = (
+                        Path("rentabilidades")
+                        / f"rentabilidade_{mm}_{payload.ano}_agrupada.xlsx"
+                    )
+                    if padrao.exists():
+                        cc.ARQUIVO_RENTABILIDADE = str(padrao)
+                    else:
+                        # Se não encontrou, deixar None (o código defensivo tratará)
+                        cc.ARQUIVO_RENTABILIDADE = None
+            except Exception:
+                # Se houver erro, garantir que None seja definido para evitar NameError
+                cc.ARQUIVO_RENTABILIDADE = None
+
+            calc = CalculoComissao()
+            calc.executar(decisoes_cross_selling=payload.decisoes_cross_selling or [])
+        return {"success": True, "message": "Cálculo concluído"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Erro ao executar cálculo: {str(e)}"
+        )
+
+
+# ==================== ENDPOINTS - DEBUG ====================
+
+
+@app.get("/debug/logs")
+async def obter_logs(lines: int = Query(200, ge=1, le=5000)):
+    """Retorna as últimas linhas do arquivo de logs do adapter."""
+    try:
+        log_path = Path(LOG_FILE)
+        if not log_path.exists():
+            return PlainTextResponse("Arquivo de log não encontrado.", status_code=404)
+        with open(log_path, "r", encoding="utf-8") as f:
+            conteudo = f.readlines()
+        tail = "".join(conteudo[-lines:])
+        return PlainTextResponse(tail)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao ler logs: {e}")
 
 
 # ==================== ENDPOINTS - RESULTADOS ====================

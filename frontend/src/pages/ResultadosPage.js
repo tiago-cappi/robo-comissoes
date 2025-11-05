@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Card,
   Tabs,
@@ -10,6 +10,7 @@ import {
   message,
   Modal,
   Tooltip,
+  Tag,
 } from 'antd';
 import {
   DownloadOutlined,
@@ -58,6 +59,198 @@ const PRESETS_COLUNAS = {
   },
 };
 
+const formatCurrencyBR = (value) => {
+  const num = Number(value);
+  if (Number.isNaN(num)) return '-';
+  return num.toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+};
+
+const formatPercent = (value) => {
+  const num = Number(value);
+  if (Number.isNaN(num)) return '-';
+  return `${(num * 100).toFixed(2)}%`;
+};
+
+const groupData = (data = [], keyGetter, options = {}) => {
+  const { createMaster, childProcessor, finalize } = options;
+  const map = new Map();
+
+  data.forEach((item, itemIndex) => {
+    const key = keyGetter(item, itemIndex);
+    if (!map.has(key)) {
+      const master = createMaster ? createMaster(item, key) : { ...item };
+      map.set(key, { ...master, children: [] });
+    }
+
+    const group = map.get(key);
+    const childIndex = group.children.length;
+    const processedChild = childProcessor ? childProcessor(item, group, childIndex) : item;
+    group.children.push(processedChild);
+  });
+
+  return Array.from(map.entries()).map(([key, group]) => {
+    if (finalize) {
+      return finalize(group, key);
+    }
+    return { ...group, key };
+  });
+};
+
+const groupFaturamentoData = (rawData = []) => {
+  const processMap = new Map();
+
+  const normalize = (v) => String(v ?? '').trim().toUpperCase();
+
+  for (const row of rawData) {
+    const processoKey = row.processo || '';
+    if (!processMap.has(processoKey)) {
+      processMap.set(processoKey, {
+        key: processoKey,
+        processo: processoKey,
+        total_faturado_processo: 0,
+        comissao_total_processo: 0,
+        linhas_envolvidas: new Set(),
+        itemMap: new Map(),
+      });
+    }
+    const processoEntry = processMap.get(processoKey);
+
+    const itemKey = normalize(row.cod_produto) || `ITEM_${normalize(row.descricao_produto)}`;
+    if (!processoEntry.itemMap.has(itemKey)) {
+      processoEntry.itemMap.set(itemKey, {
+        key: `${processoKey}-${itemKey}`,
+        processo: processoKey,
+        cod_produto: row.cod_produto,
+        descricao_produto: row.descricao_produto,
+        linha: row.linha,
+        grupo: row.grupo,
+        subgrupo: row.subgrupo,
+        tipo_mercadoria: row.tipo_mercadoria,
+        faturamento_item: Number(row.faturamento_item || 0),
+        item_key: itemKey,
+        comissao_total_item: 0,
+        colaboradores: [],
+      });
+    }
+    const itemEntry = processoEntry.itemMap.get(itemKey);
+    itemEntry.colaboradores.push({
+      ...row,
+      key: `${processoKey}-${itemKey}-${row.id_colaborador || row.nome_colaborador || (itemEntry.colaboradores || []).length}`,
+    });
+  }
+
+  const resultado = [];
+  for (const processoEntry of processMap.values()) {
+    for (const itemEntry of processoEntry.itemMap.values()) {
+      itemEntry.comissao_total_item = itemEntry.colaboradores.reduce(
+        (acc, child) => acc + Number(child.comissao_calculada || 0),
+        0
+      );
+      processoEntry.linhas_envolvidas.add(itemEntry.linha);
+    }
+    processoEntry.items = Array.from(processoEntry.itemMap.values());
+    processoEntry.total_faturado_processo = processoEntry.items.reduce(
+      (acc, item) => acc + Number(item.faturamento_item || 0),
+      0
+    );
+    processoEntry.comissao_total_processo = processoEntry.items.reduce(
+      (acc, item) => acc + Number(item.comissao_total_item || 0),
+      0
+    );
+    processoEntry.linhas_envolvidas_array = Array.from(processoEntry.linhas_envolvidas).filter(Boolean);
+    delete processoEntry.itemMap;
+    delete processoEntry.linhas_envolvidas;
+    resultado.push(processoEntry);
+  }
+  return resultado;
+};
+
+const groupRecebimentoData = (data = []) =>
+  groupData(
+    data,
+    (item) => {
+      const processo = item.processo || '';
+      const dataRecebimento = item.DATA_RECEBIMENTO || '';
+      const fallback = `valor_${item.valor_recebido_total || 0}`;
+      return `${processo}__${dataRecebimento || fallback}`;
+    },
+    {
+      createMaster: (item) => ({
+        processo: item.processo,
+        DATA_RECEBIMENTO: item.DATA_RECEBIMENTO,
+        valor_recebido_total: Number(item.valor_recebido_total || 0),
+      }),
+      childProcessor: (item, _group, index) => ({
+        ...item,
+        key: `${item.processo || ''}_${item.DATA_RECEBIMENTO || ''}_${item.id_colaborador || item.nome_colaborador || index}`,
+      }),
+      finalize: (group, key) => ({
+        ...group,
+        key,
+        comissao_total_adiantada: group.children.reduce((acc, child) => acc + Number(child.comissao_total || 0), 0),
+        total_comissionados: group.children.length,
+      }),
+    }
+  );
+
+const groupReconciliacaoData = (data = []) => {
+  const resumos = data.filter((item) => item.SALDO_FINAL_RECONCILIACAO !== undefined && item.SALDO_FINAL_RECONCILIACAO !== null);
+  const linhas = data.filter((item) => item.SALDO_FINAL_RECONCILIACAO === undefined || item.SALDO_FINAL_RECONCILIACAO === null);
+
+  return resumos.map((resumo, index) => {
+    const processo = resumo.PROCESSO || resumo.processo;
+    const comissaoCorretaTotal = resumo.COMISSAO_CORRETA_TOTAL ?? resumo.COMISSOES_CORRETA_TOTAL;
+    const totalAdiantamentos = resumo.TOTAL_ADIANTAMENTOS_PAGOS ?? resumo.TOTAL_ADIANTADO ?? resumo.total_adiantamentos_pagos;
+
+    const itemMap = new Map();
+    linhas
+      .filter((r) => (r.processo || r.PROCESSO) === processo)
+      .forEach((r, idx) => {
+        const cod = r.cod_produto || '';
+        const key = cod || `item_${r.descricao_produto || ''}`;
+        if (!itemMap.has(key)) {
+          itemMap.set(key, {
+            key: `${processo}-${key}`,
+            processo,
+            cod_produto: r.cod_produto,
+            descricao_produto: r.descricao_produto,
+            linha: r.linha,
+            comissao_total_item: 0,
+            colaboradores: [],
+          });
+        }
+        const itemEntry = itemMap.get(key);
+        itemEntry.colaboradores.push({ ...r, key: `${processo}-${key}-${r.id_colaborador || idx}` });
+      });
+
+    const items = Array.from(itemMap.values()).map((it) => ({
+      ...it,
+      comissao_total_item: it.colaboradores.reduce((acc, c) => acc + Number(c.comissao_calculada || 0), 0),
+      total_colaboradores: it.colaboradores.length,
+    }));
+
+    const saldo = Number(resumo.SALDO_FINAL_RECONCILIACAO || 0);
+    let statusRecon = 'Quitado';
+    if (saldo > 0) statusRecon = 'A Pagar';
+    else if (saldo < 0) statusRecon = 'A Descontar';
+
+    return {
+      ...resumo,
+      key: `resumo_${processo || index}_${index}`,
+      PROCESSO: processo,
+      statusRecon,
+      COMISSAO_CORRETA_TOTAL: comissaoCorretaTotal,
+      TOTAL_ADIANTAMENTOS_PAGOS: totalAdiantamentos,
+      items,
+    };
+  });
+};
+
 const ResultadosPage = () => {
   const [abas, setAbas] = useState([]);
   const [abaAtiva, setAbaAtiva] = useState('');
@@ -76,6 +269,13 @@ const ResultadosPage = () => {
   const [modalData, setModalData] = useState(null);
   const [presetAtivo, setPresetAtivo] = useState(null);
   const [colunasVisiveis, setColunasVisiveis] = useState(null);
+  const isDebug = useMemo(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('debug') === '1';
+    } catch (_) {
+      return false;
+    }
+  }, []);
 
   const carregarAbas = useCallback(async () => {
     try {
@@ -227,6 +427,540 @@ const ResultadosPage = () => {
   };
 
   const abaAtivaKey = (abaAtiva || '').toString().trim().toUpperCase();
+  const isComissoesCalculadas = abaAtivaKey === 'COMISSOES_CALCULADAS';
+  const isComissoesRecebimento = abaAtivaKey === 'COMISSOES_RECEBIMENTO';
+  const isReconciliacao = abaAtivaKey === 'RECONCILIACAO';
+
+  const dadosProcessados = useMemo(() => {
+    if (isComissoesCalculadas) return groupFaturamentoData(dados);
+    if (isComissoesRecebimento) return groupRecebimentoData(dados);
+    if (isReconciliacao) return groupReconciliacaoData(dados);
+    return dados;
+  }, [dados, isComissoesCalculadas, isComissoesRecebimento, isReconciliacao]);
+
+  const colunasMestreComissoesCalculadas = useMemo(
+    () => [
+      {
+        title: 'Processo',
+        dataIndex: 'processo',
+        key: 'processo',
+        width: 140,
+        fixed: 'left',
+      },
+      {
+        title: 'Total Faturado (Processo)',
+        dataIndex: 'total_faturado_processo',
+        key: 'total_faturado_processo',
+        width: 200,
+        align: 'right',
+        render: (value) => formatCurrencyBR(value),
+      },
+      {
+        title: 'Total Comissões (Processo)',
+        dataIndex: 'comissao_total_processo',
+        key: 'comissao_total_processo',
+        width: 200,
+        align: 'right',
+        render: (value) => formatCurrencyBR(value),
+      },
+      {
+        title: 'Linhas Envolvidas',
+        dataIndex: 'linhas_envolvidas_array',
+        key: 'linhas_envolvidas_array',
+        width: 240,
+        render: (arr) => (Array.isArray(arr) ? arr.map((l) => <Tag key={l}>{l}</Tag>) : null),
+      },
+    ],
+    []
+  );
+
+  const colunasItensComissoesCalculadas = useMemo(
+    () => [
+      {
+        title: 'Item',
+        key: 'item',
+        width: 260,
+        render: (_, record) => {
+          const cod = record.cod_produto ? String(record.cod_produto) : '-';
+          const descricao = record.descricao_produto ? String(record.descricao_produto) : '-';
+          return `${cod} - ${descricao}`;
+        },
+      },
+      { title: 'Linha', dataIndex: 'linha', key: 'linha', width: 160 },
+      { title: 'Grupo', dataIndex: 'grupo', key: 'grupo', width: 160 },
+      { title: 'Subgrupo', dataIndex: 'subgrupo', key: 'subgrupo', width: 160 },
+      { title: 'Tipo Mercadoria', dataIndex: 'tipo_mercadoria', key: 'tipo_mercadoria', width: 180 },
+      { title: 'Valor Faturado (Item)', dataIndex: 'faturamento_item', key: 'faturamento_item', width: 180, align: 'right', render: (v) => formatCurrencyBR(v) },
+      { title: 'Comissão (Item)', dataIndex: 'comissao_total_item', key: 'comissao_total_item', width: 180, align: 'right', render: (v) => formatCurrencyBR(v) },
+    ],
+    []
+  );
+
+  const colunasDetalheComissoesCalculadas = useMemo(
+    () => [
+      {
+        title: 'Colaborador',
+        dataIndex: 'nome_colaborador',
+        key: 'nome_colaborador',
+        width: 220,
+      },
+      {
+        title: 'Cargo',
+        dataIndex: 'cargo',
+        key: 'cargo',
+        width: 200,
+      },
+      {
+        title: 'FC Aplicado',
+        dataIndex: 'fator_correcao_fc',
+        key: 'fator_correcao_fc',
+        width: 160,
+        render: (value) => formatPercent(value),
+      },
+      {
+        title: 'Comissão Calculada',
+        dataIndex: 'comissao_calculada',
+        key: 'comissao_calculada',
+        width: 180,
+        align: 'right',
+        render: (value) => formatCurrencyBR(value),
+      },
+      {
+        title: 'Ações',
+        key: 'acoes',
+        width: 140,
+        render: (_, childRecord) => (
+          <Button
+            type="link"
+            icon={<EyeOutlined />}
+            onClick={() => handleDetalhesClick(childRecord)}
+            size="small"
+          >
+            Ver Detalhes
+          </Button>
+        ),
+      },
+    ],
+    [handleDetalhesClick]
+  );
+
+  const colunasMestreComissoesRecebimento = useMemo(
+    () => [
+      {
+        title: 'Processo',
+        dataIndex: 'processo',
+        key: 'processo',
+        width: 140,
+        fixed: 'left',
+      },
+      {
+        title: 'Data Recebimento',
+        dataIndex: 'DATA_RECEBIMENTO',
+        key: 'DATA_RECEBIMENTO',
+        width: 180,
+      },
+      {
+        title: 'Valor Recebido',
+        dataIndex: 'valor_recebido_total',
+        key: 'valor_recebido_total',
+        width: 180,
+        align: 'right',
+        render: (value) => formatCurrencyBR(value),
+      },
+      {
+        title: 'Comissão Total (Adiantada)',
+        dataIndex: 'comissao_total_adiantada',
+        key: 'comissao_total_adiantada',
+        width: 200,
+        align: 'right',
+        render: (value) => formatCurrencyBR(value),
+      },
+      {
+        title: 'Comissionados',
+        dataIndex: 'total_comissionados',
+        key: 'total_comissionados',
+        width: 150,
+        render: (value) => <Tag color="blue">{value}</Tag>,
+      },
+    ],
+    []
+  );
+
+  const colunasDetalheComissoesRecebimento = useMemo(
+    () => [
+      {
+        title: 'Colaborador',
+        dataIndex: 'nome_colaborador',
+        key: 'nome_colaborador',
+        width: 220,
+      },
+      {
+        title: 'Cargo',
+        dataIndex: 'cargo',
+        key: 'cargo',
+        width: 200,
+      },
+      {
+        title: '% Aplicada',
+        key: 'percentual_aplicado',
+        width: 160,
+        render: (_, record) => {
+          const taxaRateio = Number(record.taxa_rateio_aplicada || 0);
+          const percentualElegibilidade = Number(record.percentual_elegibilidade_pe || 0);
+          return formatPercent(taxaRateio * percentualElegibilidade);
+        },
+      },
+      {
+        title: 'Adiantamento Calculado',
+        dataIndex: 'comissao_total',
+        key: 'comissao_total',
+        width: 200,
+        align: 'right',
+        render: (value) => formatCurrencyBR(value),
+      },
+      {
+        title: 'Ações',
+        key: 'acoes',
+        width: 140,
+        render: (_, childRecord) => (
+          <Button
+            type="link"
+            icon={<EyeOutlined />}
+            onClick={() => handleDetalhesClick(childRecord)}
+            size="small"
+          >
+            Ver Detalhes
+          </Button>
+        ),
+      },
+    ],
+    [handleDetalhesClick]
+  );
+
+  const colunasMestreReconciliacao = useMemo(
+    () => [
+      {
+        title: 'Processo',
+        dataIndex: 'PROCESSO',
+        key: 'PROCESSO',
+        width: 140,
+        fixed: 'left',
+      },
+      {
+        title: 'Status',
+        dataIndex: 'statusRecon',
+        key: 'statusRecon',
+        width: 150,
+        render: (value) => {
+          let color = 'default';
+          if (value === 'A Pagar') color = 'green';
+          if (value === 'A Descontar') color = 'red';
+          return <Tag color={color}>{value}</Tag>;
+        },
+      },
+      {
+        title: 'Comissão Correta (c/ FC)',
+        dataIndex: 'COMISSAO_CORRETA_TOTAL',
+        key: 'COMISSAO_CORRETA_TOTAL',
+        width: 200,
+        align: 'right',
+        render: (value) => formatCurrencyBR(value),
+      },
+      {
+        title: 'Total Adiantado (pago)',
+        dataIndex: 'TOTAL_ADIANTAMENTOS_PAGOS',
+        key: 'TOTAL_ADIANTAMENTOS_PAGOS',
+        width: 200,
+        align: 'right',
+        render: (value) => formatCurrencyBR(value),
+      },
+      {
+        title: 'Saldo Final',
+        dataIndex: 'SALDO_FINAL_RECONCILIACAO',
+        key: 'SALDO_FINAL_RECONCILIACAO',
+        width: 180,
+        align: 'right',
+        render: (value) => {
+          const saldo = Number(value || 0);
+          let color = undefined;
+          if (saldo > 0) color = 'green';
+          if (saldo < 0) color = 'red';
+          return <span style={{ color }}>{formatCurrencyBR(value)}</span>;
+        },
+      },
+      {
+        title: 'Ações',
+        key: 'acoes',
+        width: 150,
+        fixed: 'right',
+        render: (_, record) => (
+          <Button
+            type="link"
+            icon={<EyeOutlined />}
+            onClick={() => handleDetalhesClick(record)}
+            size="small"
+          >
+            Ver Balanço
+          </Button>
+        ),
+      },
+    ],
+    [handleDetalhesClick]
+  );
+
+  const colunasDetalheReconciliacao = useMemo(
+    () => [
+      {
+        title: 'Colaborador',
+        dataIndex: 'nome_colaborador',
+        key: 'nome_colaborador',
+        width: 220,
+      },
+      {
+        title: 'Cargo',
+        dataIndex: 'cargo',
+        key: 'cargo',
+        width: 200,
+      },
+      {
+        title: 'Item',
+        dataIndex: 'descricao_produto',
+        key: 'descricao_produto',
+        width: 220,
+      },
+      {
+        title: 'FC Histórico',
+        dataIndex: 'fator_correcao_fc',
+        key: 'fator_correcao_fc',
+        width: 160,
+        render: (value) => formatPercent(value),
+      },
+      {
+        title: 'Comissão Correta (Item)',
+        dataIndex: 'comissao_calculada',
+        key: 'comissao_calculada',
+        width: 200,
+        align: 'right',
+        render: (value) => formatCurrencyBR(value),
+      },
+      {
+        title: 'Ações',
+        key: 'acoes',
+        width: 150,
+        render: (_, childRecord) => (
+          <Button
+            type="link"
+            icon={<EyeOutlined />}
+            onClick={() => handleDetalhesClick(childRecord)}
+            size="small"
+          >
+            Ver Detalhes
+          </Button>
+        ),
+      },
+    ],
+    [handleDetalhesClick]
+  );
+
+  const expandableComissoesCalculadas = useMemo(
+    () => ({
+      expandedRowRender: (processoRecord) => {
+        const normalize = (v) => String(v ?? '').trim().toUpperCase();
+        const items = Array.isArray(processoRecord.items) ? processoRecord.items : [];
+        // Mesclar itens idênticos por segurança (evita repetições visuais por linha de colaborador)
+        const mergedMap = new Map();
+        items.forEach((it) => {
+          const k = `${normalize(it.cod_produto)}|${normalize(it.descricao_produto)}`;
+          if (!mergedMap.has(k)) {
+            mergedMap.set(k, {
+              ...it,
+              colaboradores: Array.isArray(it.colaboradores) ? [...it.colaboradores] : [],
+            });
+          } else {
+            const acc = mergedMap.get(k);
+            acc.colaboradores = acc.colaboradores.concat(Array.isArray(it.colaboradores) ? it.colaboradores : []);
+            acc.comissao_total_item = Number(acc.comissao_total_item || 0) + Number(it.comissao_total_item || 0);
+          }
+        });
+        const mergedItems = Array.from(mergedMap.values());
+
+        if (isDebug && String(processoRecord.processo || processoRecord.PROCESSO) === '999999') {
+          try {
+            // Consola completa
+            // eslint-disable-next-line no-console
+            console.group('DEBUG COMISSOES_CALCULADAS - Processo 999999');
+            // eslint-disable-next-line no-console
+            console.table(items.map((it) => ({ key: it.key, item_key: it.item_key, cod: it.cod_produto, desc: it.descricao_produto, colaboradores_len: (it.colaboradores || []).length, fat_item: it.faturamento_item, comissao_total_item: it.comissao_total_item })));
+            // eslint-disable-next-line no-console
+            console.table(mergedItems.map((it) => ({ key: it.key, merged_key: `${normalize(it.cod_produto)}|${normalize(it.descricao_produto)}`, item_key: it.item_key, colaboradores_len: (it.colaboradores || []).length, fat_item: it.faturamento_item, comissao_total_item: it.comissao_total_item })));
+            // eslint-disable-next-line no-console
+            console.groupEnd();
+          } catch (_) { }
+        }
+
+        return (
+          <div>
+            {isDebug && String(processoRecord.processo || processoRecord.PROCESSO) === '999999' && (
+              <div style={{ background: '#fffbe6', border: '1px solid #ffe58f', padding: 8, marginBottom: 8, fontFamily: 'monospace', fontSize: 12 }}>
+                <div><b>DEBUG Processo 999999</b></div>
+                <div>items(raw): {items.length} · items(merged): {mergedItems.length}</div>
+                <div>raw keys: {items.map((it) => it.item_key || it.key).join(', ')}</div>
+                <div>merged keys: {mergedItems.map((it) => it.item_key || it.key).join(', ')}</div>
+              </div>
+            )}
+            <Table
+              columns={colunasItensComissoesCalculadas}
+              dataSource={mergedItems}
+              rowKey="key"
+              pagination={false}
+              size="small"
+              scroll={{ x: 'max-content' }}
+              expandable={{
+                expandedRowRender: (itemRecord) => {
+                  const colaboradores = Array.isArray(itemRecord.colaboradores)
+                    ? itemRecord.colaboradores.map((colab) => ({
+                      key: colab.key,
+                      nome_colaborador: colab.nome_colaborador,
+                      cargo: colab.cargo,
+                      fator_correcao_fc: colab.fator_correcao_fc,
+                      comissao_calculada: colab.comissao_calculada,
+                      originalData: colab,
+                    }))
+                    : [];
+                  return (
+                    <Table
+                      columns={colunasDetalheComissoesCalculadas.map((col) => {
+                        if (col.key === 'acoes') {
+                          return {
+                            ...col,
+                            render: (_, record) => (
+                              <Button
+                                type="link"
+                                icon={<EyeOutlined />}
+                                onClick={() => handleDetalhesClick(record.originalData || record)}
+                                size="small"
+                              >
+                                Ver Detalhes
+                              </Button>
+                            ),
+                          };
+                        }
+                        return col;
+                      })}
+                      dataSource={colaboradores}
+                      rowKey="key"
+                      pagination={false}
+                      size="small"
+                      scroll={{ x: 'max-content' }}
+                    />
+                  );
+                },
+                rowExpandable: (itemRecord) => Array.isArray(itemRecord.colaboradores) && itemRecord.colaboradores.length > 0,
+              }}
+            />
+          </div>
+        );
+      },
+      rowExpandable: (processoRecord) => Array.isArray(processoRecord.items) && processoRecord.items.length > 0,
+    }),
+    [colunasItensComissoesCalculadas, colunasDetalheComissoesCalculadas]
+  );
+
+  const expandableComissoesRecebimento = useMemo(
+    () => ({
+      expandedRowRender: (record) => (
+        <Table
+          columns={colunasDetalheComissoesRecebimento}
+          dataSource={record.children}
+          rowKey="key"
+          pagination={false}
+          size="small"
+          scroll={{ x: 'max-content' }}
+        />
+      ),
+      rowExpandable: (record) => Array.isArray(record.children) && record.children.length > 0,
+    }),
+    [colunasDetalheComissoesRecebimento]
+  );
+
+  const colunasItensReconciliacao = useMemo(
+    () => [
+      {
+        title: 'Item',
+        key: 'item',
+        width: 260,
+        render: (_, record) => {
+          const cod = record.cod_produto ? String(record.cod_produto) : '';
+          const descricao = record.descricao_produto ? String(record.descricao_produto) : '-';
+          return cod ? `${cod} - ${descricao}` : descricao;
+        },
+      },
+      { title: 'Comissão Correta (Item)', dataIndex: 'comissao_total_item', key: 'comissao_total_item', width: 200, align: 'right', render: (v) => formatCurrencyBR(v) },
+      { title: 'Colaboradores', dataIndex: 'total_colaboradores', key: 'total_colaboradores', width: 160, render: (v) => <Tag color="blue">{v}</Tag> },
+    ],
+    []
+  );
+
+  const expandableReconciliacao = useMemo(
+    () => ({
+      expandedRowRender: (resumoRecord) => (
+        <Table
+          columns={colunasItensReconciliacao}
+          dataSource={resumoRecord.items}
+          rowKey="key"
+          pagination={false}
+          size="small"
+          scroll={{ x: 'max-content' }}
+          expandable={{
+            expandedRowRender: (itemRecord) => {
+              const colaboradores = Array.isArray(itemRecord.colaboradores)
+                ? itemRecord.colaboradores.map((colab) => ({
+                  key: colab.key,
+                  nome_colaborador: colab.nome_colaborador,
+                  cargo: colab.cargo,
+                  descricao_produto: colab.descricao_produto,
+                  fator_correcao_fc: colab.fator_correcao_fc,
+                  comissao_calculada: colab.comissao_calculada,
+                  originalData: colab,
+                }))
+                : [];
+              return (
+                <Table
+                  columns={colunasDetalheReconciliacao.map((col) => {
+                    if (col.key === 'acoes') {
+                      return {
+                        ...col,
+                        render: (_, record) => (
+                          <Button
+                            type="link"
+                            icon={<EyeOutlined />}
+                            onClick={() => handleDetalhesClick(record.originalData || record)}
+                            size="small"
+                          >
+                            Ver Detalhes
+                          </Button>
+                        ),
+                      };
+                    }
+                    return col;
+                  })}
+                  dataSource={colaboradores}
+                  rowKey="key"
+                  pagination={false}
+                  size="small"
+                  scroll={{ x: 'max-content' }}
+                />
+              );
+            },
+            rowExpandable: (itemRecord) => Array.isArray(itemRecord.colaboradores) && itemRecord.colaboradores.length > 0,
+          }}
+        />
+      ),
+      rowExpandable: (resumoRecord) => Array.isArray(resumoRecord.items) && resumoRecord.items.length > 0,
+    }),
+    [colunasItensReconciliacao, colunasDetalheReconciliacao]
+  );
+
   const renderModalContent = () => {
     if (!modalData) return null;
     switch (abaAtivaKey) {
@@ -422,6 +1156,8 @@ const ResultadosPage = () => {
     ),
   });
 
+  const colunasTabelaGenerica = colunasTabela;
+
   return (
     <div>
       <Card
@@ -473,25 +1209,55 @@ const ResultadosPage = () => {
         <Tabs activeKey={abaAtiva} onChange={setAbaAtiva} type="card">
           {abas.map((aba) => (
             <TabPane tab={aba} key={aba}>
-              <Table
-                columns={colunasTabela}
-                dataSource={dados.map((item, idx) => ({
-                  ...item,
-                  key: idx,
-                }))}
-                loading={loading}
-                onChange={handleTableChange}
-                pagination={{
-                  current: pagination.current,
-                  pageSize: pagination.pageSize,
-                  total: pagination.total,
-                  showSizeChanger: true,
-                  showTotal: (total) => `Total: ${total} linhas`,
-                  pageSizeOptions: ['20', '50', '100'],
-                }}
-                scroll={{ x: 'max-content', y: 600 }}
-                size="small"
-              />
+              {(() => {
+                const abaKey = (aba || '').toString().trim().toUpperCase();
+                const isAbaCalculadas = abaKey === 'COMISSOES_CALCULADAS';
+                const isAbaRecebimento = abaKey === 'COMISSOES_RECEBIMENTO';
+                const isAbaReconciliacao = abaKey === 'RECONCILIACAO';
+
+                const colunasTabelaAtual = isAbaCalculadas
+                  ? colunasMestreComissoesCalculadas
+                  : isAbaRecebimento
+                    ? colunasMestreComissoesRecebimento
+                    : isAbaReconciliacao
+                      ? colunasMestreReconciliacao
+                      : colunasTabelaGenerica;
+
+                const expandableAtual = isAbaCalculadas
+                  ? expandableComissoesCalculadas
+                  : isAbaRecebimento
+                    ? expandableComissoesRecebimento
+                    : isAbaReconciliacao
+                      ? expandableReconciliacao
+                      : undefined;
+
+                const dadosParaTabela = abaKey === abaAtivaKey
+                  ? isAbaCalculadas || isAbaRecebimento || isAbaReconciliacao
+                    ? dadosProcessados
+                    : dados.map((item, idx) => ({ ...item, key: idx }))
+                  : [];
+
+                return (
+                  <Table
+                    columns={colunasTabelaAtual}
+                    dataSource={dadosParaTabela}
+                    loading={loading}
+                    onChange={handleTableChange}
+                    pagination={{
+                      current: pagination.current,
+                      pageSize: pagination.pageSize,
+                      total: pagination.total,
+                      showSizeChanger: true,
+                      showTotal: (total) => `Total: ${total} linhas`,
+                      pageSizeOptions: ['20', '50', '100'],
+                    }}
+                    scroll={{ x: 'max-content', y: 600 }}
+                    size="small"
+                    expandable={expandableAtual}
+                    rowKey="key"
+                  />
+                );
+              })()}
             </TabPane>
           ))}
         </Tabs>

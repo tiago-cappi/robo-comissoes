@@ -625,9 +625,29 @@ def run_preparador(mes: int, ano: int) -> bool:
     """
     print(f"--- Preparador: gerando arquivos para {mes}/{ano} ---")
 
+    # Auto-conversão: se existir .xlsx e não existir .csv, converte automaticamente
+    if not os.path.exists(ARQUIVO_ANALISE_COMPLETA):
+        xlsx_path = "Analise_Comercial_Completa.xlsx"
+        if os.path.exists(xlsx_path):
+            try:
+                print(f"Detectado {xlsx_path} - convertendo para .csv...")
+                df_temp = pd.read_excel(xlsx_path, dtype=str)
+                df_temp.to_csv(
+                    ARQUIVO_ANALISE_COMPLETA, index=False, encoding="utf-8-sig"
+                )
+                print(f"[OK] Conversao concluida: {ARQUIVO_ANALISE_COMPLETA} criado.")
+            except Exception as e:
+                print(f"AVISO: Falha ao converter .xlsx para .csv: {e}")
+                print("Tentarei usar o arquivo .xlsx diretamente se possivel.")
+        else:
+            print(
+                f"\nERRO CRÍTICO: O arquivo '{ARQUIVO_ANALISE_COMPLETA}' não foi encontrado e '{xlsx_path}' também não existe."
+            )
+            return False
+
     if not os.path.exists(ARQUIVO_ANALISE_COMPLETA):
         print(
-            f"\nERRO CRÍTICO: O arquivo '{ARQUIVO_ANALISE_COMPLETA}' não foi encontrado."
+            f"\nERRO CRÍTICO: O arquivo '{ARQUIVO_ANALISE_COMPLETA}' não foi encontrado após tentativa de conversão."
         )
         return False
 

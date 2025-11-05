@@ -408,6 +408,12 @@ ARQUIVO_RECEBIMENTOS = "Recebimentos_do_Mes.xlsx"
 ARQUIVO_PAGAMENTOS_REGULARES = "Pagamentos_Regulares_do_Mes.xlsx"
 ARQUIVO_STATUS_PAGAMENTOS = "Status_Pagamentos_Processos.xlsx"
 ARQUIVO_ESTADO = "Estado_Processos_Recebimento.xlsx"
+# ARQUIVO_RENTABILIDADE, ARQUIVO_FATURADOS, ARQUIVO_CONVERSOES, ARQUIVO_FATURADOS_YTD
+# são definidos no bloco __main__ ou podem ser definidos externamente antes de importar CalculoComissao
+ARQUIVO_RENTABILIDADE = None  # Será definido no __main__ ou externamente
+ARQUIVO_FATURADOS = None
+ARQUIVO_CONVERSOES = None
+ARQUIVO_FATURADOS_YTD = None
 # FORÇAR DEBUG TEMPORARIAMENTE (será desativado após a execução)
 FORCE_DEBUG_TERMINAL = False
 
@@ -495,7 +501,34 @@ class CalculoComissao:
                     "Conversoes.csv",
                 ]
             )
-            self.data["RENTABILIDADE_REALIZADA"] = pd.read_excel(ARQUIVO_RENTABILIDADE)
+            # Carregar rentabilidade realizada (defensivo, pode não existir)
+            try:
+                if ARQUIVO_RENTABILIDADE and os.path.exists(ARQUIVO_RENTABILIDADE):
+                    self.data["RENTABILIDADE_REALIZADA"] = pd.read_excel(
+                        ARQUIVO_RENTABILIDADE
+                    )
+                else:
+                    # Se não encontrou arquivo, criar DataFrame vazio com estrutura esperada
+                    self.data["RENTABILIDADE_REALIZADA"] = pd.DataFrame(
+                        columns=[
+                            "Negócio",
+                            "Grupo",
+                            "Subgrupo",
+                            "Tipo de Mercadoria",
+                            "rentabilidade_realizada_pct",
+                        ]
+                    )
+            except Exception:
+                # Fallback: DataFrame vazio se houver qualquer erro
+                self.data["RENTABILIDADE_REALIZADA"] = pd.DataFrame(
+                    columns=[
+                        "Negócio",
+                        "Grupo",
+                        "Subgrupo",
+                        "Tipo de Mercadoria",
+                        "rentabilidade_realizada_pct",
+                    ]
+                )
             # Novo arquivo com dados de retenção de clientes por linha
             try:
                 self.data["RETENCAO_CLIENTES"] = pd.read_excel(ARQUIVO_RETENCAO)
@@ -2164,25 +2197,11 @@ class CalculoComissao:
         self.cache_regras[chave_cache] = None
         return None
 
-    def _calcular_comissoes(self):
-        """Itera sobre os itens faturados, calcula o FC para cada um e a comissão final."""
-        comissoes_calculadas = []
-        # auditoria detalhada agora é armazenada nas colunas de COMISSOES_CALCULADAS
-        df_faturados = self.data["FATURADOS"]
-        df_atribuicoes = self.data["ATRIBUICOES"]
-        df_colabs_com_cargos = self.data["COLABORADORES"]
-
-        # Pre-filtra atribuições de gestão para otimização
-        cargos_gestao = df_colabs_com_cargos[
-            df_colabs_com_cargos["tipo_cargo"] == "Gestão"
-        ]["cargo"].unique()
-        df_atribuicoes_gestao = df_atribuicoes[
-            df_atribuicoes["cargo"].isin(cargos_gestao)
-        ]
-
-        # --- Detecção de Cross-Selling por Processo (pré-scan) ---
-        # Estrutura: self.cross_selling_decisions[processo] = {is_cross:bool, consultor:str, linha:str, taxa:float, decision:'A'|'B'}
-        self.cross_selling_decisions = {}
+    def _detectar_cross_selling(self):
+        """Detecta casos de cross-selling e popula self.casos_cross_selling_detectados.
+        Não realiza prompts nem define decisões; apenas identifica os casos.
+        """
+        self.casos_cross_selling_detectados = []
         try:
             # Construir mapa de aliases para colaboradores (case-insensitive)
             alias_map = {}
@@ -2197,6 +2216,9 @@ class CalculoComissao:
                     alias_map[a] = p
                     alias_map_lower[a.lower()] = p
 
+            df_faturados = self.data["FATURADOS"]
+            df_atribuicoes = self.data["ATRIBUICOES"]
+            df_colabs_com_cargos = self.data["COLABORADORES"]
             cross_df = self.data.get("CROSS_SELLING", pd.DataFrame())
 
             if "Processo" in df_faturados.columns:
@@ -2218,7 +2240,6 @@ class CalculoComissao:
                         gerente_padrao = alias_map_lower.get(raw_norm.lower(), raw_norm)
 
                     # Verificar se é Consultor Externo
-                    # matching case-insensitive against coluna 'nome_colaborador'
                     try:
                         mask_col = (
                             df_colabs_com_cargos["nome_colaborador"]
@@ -2279,26 +2300,76 @@ class CalculoComissao:
                         except Exception:
                             taxa = 0.0
 
-                        # Obter decisão do usuário (prompt) — usar opção default quando não interativo
-                        try:
-                            decisao = self._handle_cross_selling_prompt(
-                                processo, gerente_padrao, linha_do_processo, taxa
-                            )
-                        except Exception:
-                            decisao = self.params.get(
-                                "cross_selling_default_option", "A"
-                            )
-
-                        self.cross_selling_decisions[processo] = {
-                            "is_cross": True,
-                            "consultor": gerente_padrao,
-                            "linha": linha_do_processo,
-                            "taxa": float(taxa),
-                            "decision": decisao,
-                            "timestamp": datetime.now().isoformat(),
-                        }
+                        self.casos_cross_selling_detectados.append(
+                            {
+                                "processo": processo,
+                                "consultor": gerente_padrao,
+                                "linha": linha_do_processo,
+                                "taxa": float(taxa),
+                            }
+                        )
         except Exception as e:
             self._log_validacao("AVISO", f"Erro na detecção de cross-selling: {e}", {})
+
+    def _calcular_comissoes(self):
+        """Itera sobre os itens faturados, calcula o FC para cada um e a comissão final."""
+        comissoes_calculadas = []
+        # auditoria detalhada agora é armazenada nas colunas de COMISSOES_CALCULADAS
+        df_faturados = self.data["FATURADOS"]
+        df_atribuicoes = self.data["ATRIBUICOES"]
+        df_colabs_com_cargos = self.data["COLABORADORES"]
+
+        # Pre-filtra atribuições de gestão para otimização
+        cargos_gestao = df_colabs_com_cargos[
+            df_colabs_com_cargos["tipo_cargo"] == "Gestão"
+        ]["cargo"].unique()
+        df_atribuicoes_gestao = df_atribuicoes[
+            df_atribuicoes["cargo"].isin(cargos_gestao)
+        ]
+
+        # --- Detecção de Cross-Selling por Processo (pré-scan) ---
+        # Estrutura de decisões: self.cross_selling_decisions[processo] = {is_cross:bool, consultor:str, linha:str, taxa:float, decision:'A'|'B'}
+        self.cross_selling_decisions = {}
+        try:
+            self._detectar_cross_selling()
+        except Exception as e:
+            self._log_validacao("AVISO", f"Erro na detecção de cross-selling: {e}", {})
+
+        # Definir decisões com base nas decisões passadas (ou usar default)
+        try:
+            from datetime import datetime
+        except Exception:
+            pass
+        for caso in getattr(self, "casos_cross_selling_detectados", []) or []:
+            processo = caso.get("processo")
+            gerente_padrao = caso.get("consultor")
+            linha_do_processo = caso.get("linha")
+            taxa = caso.get("taxa", 0.0)
+
+            decisao = None
+            if getattr(self, "decisoes_passadas", None):
+                decisao_encontrada = next(
+                    (
+                        d.get("decision")
+                        for d in self.decisoes_passadas
+                        if d.get("processo") == processo
+                    ),
+                    None,
+                )
+                if decisao_encontrada:
+                    decisao = decisao_encontrada
+
+            if decisao is None:  # Fallback se não veio da API
+                decisao = self.params.get("cross_selling_default_option", "A")
+
+            self.cross_selling_decisions[processo] = {
+                "is_cross": True,
+                "consultor": gerente_padrao,
+                "linha": linha_do_processo,
+                "taxa": float(taxa),
+                "decision": decisao,
+                "timestamp": datetime.now().isoformat(),
+            }
 
         try:
             total_items_step5 = len(df_faturados) if df_faturados is not None else 0
@@ -2464,15 +2535,13 @@ class CalculoComissao:
                     continue
                 processed_colabs.add(key_colab)
 
-                # Se este colaborador for o Consultor Externo removido na opção B, pular
+                # Pular o Consultor Externo do rateio normal para AMBAS as opções (A e B)
                 if (
                     cs_info
                     and cs_info.get("is_cross")
-                    and cs_info.get("decision") == "B"
+                    and colab_nome == cs_info.get("consultor")
                 ):
-                    # opção B: o Consultor Externo é removido do cálculo normal
-                    if colab_nome == cs_info.get("consultor"):
-                        continue
+                    continue
 
                 regra = self._get_regra_comissao(**contexto_item, cargo=colab_cargo)
                 if regra is None:
@@ -4015,8 +4084,10 @@ class CalculoComissao:
             else:
                 _info(f"\nOcorreu um erro ao gerar o PDF de detalhamento: {e}")
 
-    def executar(self):
+    def executar(self, decisoes_cross_selling=None):
         """Executa o fluxo completo de cálculo de comissões."""
+        # Decisões passadas via API/UI (lista de dicts com 'processo' e 'decision')
+        self.decisoes_passadas = decisoes_cross_selling or []
         _info("Iniciando cálculo de comissões...")
         _phase("1. Carregando arquivos...")
         with _timer_ctx("Carregar arquivos", _safe_percent("carregar")):

@@ -191,16 +191,31 @@ const ConfigComissaoEditor = () => {
     try {
       const values = await formFatias.validateFields();
       const escopo = values.escopo || {};
-      const cargos = Object.keys(values.fatias || {}).filter((c) => values.fatias[c] !== undefined && values.fatias[c] !== null);
-      // calcular soma exata
-      const soma = cargos.reduce((acc, c) => acc + Number(values.fatias[c] || 0), 0);
+      const fatias = values.fatias || {};
+      // calcular soma considerando todos os cargos (vazios = 0)
+      const todosCargos = options['cargo'] || [];
+      const soma = todosCargos.reduce((acc, cargo) => {
+        const valor = fatias[cargo];
+        if (valor === undefined || valor === null || valor === '' || (typeof valor === 'string' && valor.trim() === '')) {
+          return acc;
+        }
+        const numVal = Number(valor);
+        if (isNaN(numVal)) {
+          return acc;
+        }
+        return acc + numVal;
+      }, 0);
       if (Number(soma.toFixed(2)) !== 100.00) {
         message.error('A soma das fatias por cargo deve ser exatamente 100.00%');
         return;
       }
-      // obter contagem por cargo usando query por escopo+cargo
+      // obter contagem apenas dos cargos com valor definido
+      const cargosComValor = todosCargos.filter((c) => {
+        const valor = fatias[c];
+        return valor !== undefined && valor !== null && valor !== '' && !(typeof valor === 'string' && valor.trim() === '');
+      });
       const porCargo = [];
-      for (const cargo of cargos) {
+      for (const cargo of cargosComValor) {
         const resp = await regrasAPI.getConfigComissao({ ...escopo, cargo });
         const arr = Array.isArray(resp.data) ? resp.data : [];
         porCargo.push({ cargo, linhas: arr.length });
@@ -217,14 +232,29 @@ const ConfigComissaoEditor = () => {
       const values = await formFatias.validateFields();
       const escopo = values.escopo || {};
       const fatias = values.fatias || {};
-      const cargos = Object.keys(fatias);
-      const soma = cargos.reduce((acc, c) => acc + Number(fatias[c] || 0), 0);
+      // calcular soma considerando todos os cargos (vazios = 0)
+      const todosCargos = options['cargo'] || [];
+      const soma = todosCargos.reduce((acc, cargo) => {
+        const valor = fatias[cargo];
+        if (valor === undefined || valor === null || valor === '' || (typeof valor === 'string' && valor.trim() === '')) {
+          return acc;
+        }
+        const numVal = Number(valor);
+        if (isNaN(numVal)) {
+          return acc;
+        }
+        return acc + numVal;
+      }, 0);
       if (Number(soma.toFixed(2)) !== 100.00) {
         message.error('A soma das fatias por cargo deve ser exatamente 100.00%');
         return;
       }
-      // aplicar por cargo usando updateConfigComissaoInLine
-      for (const cargo of cargos) {
+      // aplicar apenas nos cargos com valor definido
+      const cargosComValor = todosCargos.filter((c) => {
+        const valor = fatias[c];
+        return valor !== undefined && valor !== null && valor !== '' && !(typeof valor === 'string' && valor.trim() === '');
+      });
+      for (const cargo of cargosComValor) {
         const valor = fatias[cargo];
         await regrasAPI.updateConfigComissaoInLine({ ...escopo, cargo, fatia_cargo_pct: valor });
       }
@@ -280,7 +310,7 @@ const ConfigComissaoEditor = () => {
         onCancel={() => setWizardOpen(false)}
         footer={null}
         width={820}
-        destroyOnClose
+        destroyOnHidden
       >
         <Tabs activeKey={activeBatchTab} onChange={setActiveBatchTab}
           items={[
@@ -321,7 +351,9 @@ const ConfigComissaoEditor = () => {
               key: 'fatias',
               label: 'Fatia por Cargo (PE)',
               children: (
-                <Form form={formFatias} layout="vertical" onValuesChange={(_, all) => updateDynPanelFromFilters((all && all.escopo) || {})}>
+                <Form form={formFatias} layout="vertical" onValuesChange={(_, all) => {
+                  updateDynPanelFromFilters((all && all.escopo) || {});
+                }}>
                   <Form.Item label="Escopo" name={["escopo"]}>
                     <Space wrap>
                       {['linha', 'tipo_mercadoria', 'grupo', 'subgrupo'].map((f) => (
@@ -335,7 +367,8 @@ const ConfigComissaoEditor = () => {
                       ))}
                     </Space>
                   </Form.Item>
-                  <Form.Item label="Fatias por Cargo" name={["fatias"]}>
+                  {/* O 'name' foi removido deste Form.Item wrapper para corrigir o problema de atualização */}
+                  <Form.Item label="Fatias por Cargo">
                     <Space direction="vertical" style={{ width: '100%' }}>
                       {(options['cargo'] || []).map((c) => (
                         <Space key={c}>
@@ -350,19 +383,47 @@ const ConfigComissaoEditor = () => {
                   </Form.Item>
                   <Space style={{ float: 'right' }}>
                     <Button onClick={doDryRunFatias}>Pré-visualizar</Button>
-                    <Button type="primary" onClick={applyFatias}>Aplicar</Button>
+                    {/* Botão Aplicar reage a mudanças nas fatias */}
+                    <Form.Item dependencies={['fatias']} noStyle>
+                      {({ getFieldValue }) => {
+                        const fatias = getFieldValue('fatias') || {};
+                        const todosCargos = options['cargo'] || [];
+                        const soma = todosCargos.reduce((acc, cargo) => {
+                          const valor = fatias[cargo];
+                          if (valor === undefined || valor === null || valor === '' || (typeof valor === 'string' && valor.trim() === '')) return acc;
+                          const numVal = Number(valor);
+                          return isNaN(numVal) ? acc : acc + numVal;
+                        }, 0);
+                        const disabled = Number(soma.toFixed(2)) !== 100.00;
+                        // eslint-disable-next-line no-console
+                        console.debug('[PE][Fatias] Botão Aplicar. Soma:', soma, 'Desabilitado:', disabled, 'Valores:', fatias);
+                        return <Button type="primary" onClick={applyFatias} disabled={disabled}>Aplicar</Button>;
+                      }}
+                    </Form.Item>
                   </Space>
-                  {(() => {
-                    const vals = formFatias.getFieldValue('fatias') || {};
-                    const cargos = Object.keys(vals);
-                    const soma = cargos.reduce((acc, k) => acc + Number(vals[k] || 0), 0);
-                    return (
-                      <div style={{ marginTop: 12 }}>
-                        <Text>Soma das fatias: </Text>
-                        <b style={{ color: Number(soma.toFixed(2)) === 100.00 ? 'green' : 'red' }}>{soma.toFixed(2)}%</b>
-                      </div>
-                    );
-                  })()}
+
+                  {/* Exibição da soma reage a mudanças nas fatias */}
+                  <Form.Item dependencies={['fatias']} noStyle>
+                    {({ getFieldValue }) => {
+                      const fatias = getFieldValue('fatias') || {};
+                      const todosCargos = options['cargo'] || [];
+                      const soma = todosCargos.reduce((acc, cargo) => {
+                        const valor = fatias[cargo];
+                        if (valor === undefined || valor === null || valor === '' || (typeof valor === 'string' && valor.trim() === '')) return acc;
+                        const numVal = Number(valor);
+                        return isNaN(numVal) ? acc : acc + numVal;
+                      }, 0);
+                      // eslint-disable-next-line no-console
+                      console.debug('[PE][Fatias] Display Soma. Soma:', soma, 'Valores:', fatias);
+                      return (
+                        <div style={{ marginTop: 12 }}>
+                          <Text>Soma das fatias: </Text>
+                          <b style={{ color: Number(soma.toFixed(2)) === 100.00 ? 'green' : 'red' }}>{soma.toFixed(2)}%</b>
+                        </div>
+                      );
+                    }}
+                  </Form.Item>
+
                   {dryRunFatias && (
                     <div style={{ marginTop: 12 }}>
                       <Text>Linhas afetadas (total): </Text><b>{dryRunFatias.total}</b>

@@ -9,16 +9,64 @@ const api = axios.create({
   },
 });
 
-// Interceptor para erros
-api.interceptors.response.use(
-  (response) => response,
+// Interceptor de requisição para logs
+api.interceptors.request.use(
+  (config) => {
+    console.log('[API] Requisição iniciada', {
+      method: config.method?.toUpperCase(),
+      url: config.url,
+      baseURL: config.baseURL,
+      timeout: config.timeout,
+      timestamp: new Date().toISOString(),
+    });
+    return config;
+  },
   (error) => {
+    console.error('[API] Erro na configuração da requisição', error);
+    return Promise.reject(error);
+  }
+);
+
+// Interceptor de resposta para logs e tratamento de erros
+api.interceptors.response.use(
+  (response) => {
+    console.log('[API] Resposta recebida', {
+      status: response.status,
+      url: response.config.url,
+      elapsed: response.config.metadata?.startTime
+        ? `${((Date.now() - response.config.metadata.startTime) / 1000).toFixed(1)}s`
+        : 'N/A',
+      dataType: typeof response.data,
+      dataLength: Array.isArray(response.data) ? response.data.length : 'N/A',
+    });
+    return response;
+  },
+  (error) => {
+    const elapsed = error.config?.metadata?.startTime
+      ? `${((Date.now() - error.config.metadata.startTime) / 1000).toFixed(1)}s`
+      : 'N/A';
+
+    console.error('[API] Erro na resposta', {
+      url: error.config?.url,
+      elapsed,
+      errorName: error.name,
+      errorMessage: error.message,
+      errorCode: error.code,
+      hasResponse: !!error.response,
+      hasRequest: !!error.request,
+      responseStatus: error.response?.status,
+      responseData: error.response?.data,
+    });
+
     if (error.response) {
       // Erro da API
       const message = error.response.data?.detail || error.response.data?.message || 'Erro desconhecido';
       throw new Error(message);
     } else if (error.request) {
-      // Erro de rede
+      // Erro de rede ou timeout
+      if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+        throw new Error('Timeout: A requisição demorou muito para responder. Tente novamente.');
+      }
       throw new Error('Erro de conexão. Verifique se o servidor está rodando.');
     } else {
       throw error;
@@ -26,11 +74,17 @@ api.interceptors.response.use(
   }
 );
 
+// Adicionar timestamp às requisições para cálculo de tempo decorrido
+api.interceptors.request.use((config) => {
+  config.metadata = { startTime: Date.now() };
+  return config;
+});
+
 // ==================== REGRAS ====================
 
 export const regrasAPI = {
   listarAbas: () => api.get('/regras/abas'),
-  
+
   lerAba: (nomeAba, params = {}) => {
     const { page = 1, size = 20, sortBy, sortOrder, filters, allPages = false } = params;
     const queryParams = new URLSearchParams({
@@ -49,16 +103,16 @@ export const regrasAPI = {
     }
     return api.get(`/regras/aba/${nomeAba}?${queryParams}`);
   },
-  
+
   obterValoresUnicos: (nomeAba, coluna) =>
     api.get(`/regras/aba/${nomeAba}/valores-unicos/${coluna}`),
-  
+
   salvarAba: (nomeAba, data, preserveColumns = true) =>
     api.post(`/regras/aba/${nomeAba}/save`, {
       data,
       preserve_columns: preserveColumns,
     }),
-  
+
   aplicarMassa: (nomeAba, request) =>
     api.post(`/regras/aba/${nomeAba}/apply-bulk`, request),
 
@@ -84,7 +138,7 @@ export const uploadAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
-  
+
   finAdcli: (file) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -92,7 +146,7 @@ export const uploadAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
-  
+
   finConci: (file) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -100,7 +154,7 @@ export const uploadAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
-  
+
   analiseFinanceira: (file) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -114,15 +168,32 @@ export const uploadAPI = {
 
 export const execucaoAPI = {
   iniciar: (mes, ano) => api.post(`/calcular?mes=${mes}&ano=${ano}`),
-  
+
   consultarProgresso: (jobId) => api.get(`/progresso/${jobId}`),
+};
+
+// ==================== EXECUÇÃO (Pré-Scan + Execução com Decisões) ====================
+
+export const execucaoAPI2 = {
+  executarPreScanCrossSelling: (mes, ano) =>
+    api.post('/api/executar-prescan', { mes, ano }, {
+      timeout: 30000, // 30 segundos de timeout para pré-scan
+    }),
+  executarCalculo: (mes, ano, decisoes) =>
+    api.post('/api/executar-calculo', {
+      mes,
+      ano,
+      decisoes_cross_selling: decisoes || [],
+    }, {
+      timeout: 600000, // 10 minutos de timeout para cálculo completo
+    }),
 };
 
 // ==================== RESULTADOS ====================
 
 export const resultadosAPI = {
   listarAbas: () => api.get('/resultado/abas'),
-  
+
   lerAba: (nomeAba, params = {}) => {
     const { page = 1, size = 20, sortBy, sortOrder, filters } = params;
     const queryParams = new URLSearchParams({
@@ -138,10 +209,10 @@ export const resultadosAPI = {
     }
     return api.get(`/resultado/aba/${nomeAba}?${queryParams}`);
   },
-  
+
   obterValoresUnicos: (nomeAba, coluna) =>
     api.get(`/resultado/aba/${nomeAba}/valores-unicos/${coluna}`),
-  
+
   baixar: () => api.get('/baixar/resultado', { responseType: 'blob' }),
 };
 
@@ -149,6 +220,12 @@ export const resultadosAPI = {
 
 export const healthAPI = {
   check: () => api.get('/health'),
+};
+
+// ==================== DEBUG ====================
+
+export const debugAPI = {
+  getLogs: (lines = 400) => api.get(`/debug/logs?lines=${lines}`, { responseType: 'text' }),
 };
 
 export default api;
