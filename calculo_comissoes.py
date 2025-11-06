@@ -23,6 +23,8 @@ from services.payment_commission_calculator import PaymentCommissionCalculator
 from services.payment_processor import PaymentProcessor
 from services.reconciliation_calculator import ReconciliationCalculator
 from services.reconciliation_processor import ReconciliationProcessor
+from services.process_metrics_calculator import ProcessMetricsCalculator
+from services.financial_payments_loader import FinancialPaymentsLoader
 
 # Flag simples de verbosidade (NÃO muda cálculo)
 LOG_VERBOSE = os.getenv("COMISSOES_VERBOSE", "0") == "1"
@@ -1948,191 +1950,278 @@ class CalculoComissao:
 
     def _aplicar_adiantamentos_recebimentos(self):
         """
-        Calcula e aplica adiantamentos de comissão baseados nos recebimentos do mês.
-
-        REFATORADO (FASE 3): Usa PaymentProcessor para processar recebimentos.
-
-        Estratégia:
-        - Mapeia recebimentos para processos da análise comercial
-        - Identifica colaboradores que recebem por recebimento
-        - Calcula comissões (valor × taxa × PE, FC=1.0 para recebimentos)
-        - Atualiza estado dos processos (valor pago, comissão adiantada)
+        (LEGACY REMOVIDO) Lógica antiga de comissões por recebimento desativada.
+        Nova implementação será integrada em serviços dedicados (pagamentos + métricas).
         """
-        _debug(
-            "[DEBUG] Aplicando adiantamentos de recebimentos usando PaymentProcessor..."
-        )
-
-        # Criar DataFrame unificado (antecipações + pagamentos regulares)
-        pagamentos_unificados = self._unificar_pagamentos()
-
-        # Verificar se há pagamentos
-        if pagamentos_unificados.empty:
-            _debug("[DEBUG] Nenhum pagamento (antecipação ou regular) encontrado.")
-            self.comissoes_recebimento_df = pd.DataFrame()
-            return
-
-        try:
-            # DEBUG: Log dos colaboradores que recebem por recebimento
-            _debug(
-                f"[DEBUG Recebimentos] Colaboradores que recebem por recebimento: {self.recebe_por_recebimento}"
-            )
-            _debug(
-                f"[DEBUG Recebimentos] Total de pagamentos (antecipações + regulares): {len(pagamentos_unificados)}"
-            )
-
-            # Estatísticas por tipo
-            if "TIPO_PAGAMENTO" in pagamentos_unificados.columns:
-                tipos = pagamentos_unificados["TIPO_PAGAMENTO"].value_counts().to_dict()
-                for tipo, qtd in tipos.items():
-                    _debug(f"[DEBUG Recebimentos]   - {tipo}: {qtd}")
-
-            # Setup do PaymentCommissionCalculator
-            calculator = PaymentCommissionCalculator(
-                regras_comissao_getter=self._get_regra_comissao,  # Função que retorna regras
-                colaboradores_df=self.data.get("COLABORADORES", pd.DataFrame()),
-                atribuicoes_df=self.data.get("ATRIBUICOES", pd.DataFrame()),
-                recebe_por_recebimento_ids=self.recebe_por_recebimento,
-            )
-
-            # Setup do PaymentProcessor (agora com DataFrame unificado)
-            processor = PaymentProcessor(
-                recebimentos_df=pagamentos_unificados,
-                analise_comercial_df=self.data.get(
-                    "ANALISE_COMERCIAL_COMPLETA", pd.DataFrame()
-                ),
-                commission_calculator=calculator,
-                state_manager=self.state_manager,
-                status_pagamentos_df=self.data.get("STATUS_PAGAMENTOS", pd.DataFrame()),
-            )
-
-            # Processar todos os recebimentos
-            _debug("[DEBUG Recebimentos] Iniciando processamento...")
-            comissoes_df, log_mapping = processor.process_all_payments()
-            _debug(f"[DEBUG Recebimentos] Comissões geradas: {len(comissoes_df)}")
-
-            self.comissoes_recebimento_df = comissoes_df
-
-            # Salvar documentos não mapeados (para avisos na aba COMISSOES_RECEBIMENTO)
-            self.documentos_nao_mapeados_nf = processor.nao_mapeados_nf
-
-            # Log resumo
-            summary = processor.get_processing_summary(log_mapping)
-            _info(
-                f"[Recebimentos] Processados: {summary['mapeados']}/{summary['total_recebimentos']}"
-            )
-            _info(
-                f"[Recebimentos] Taxa de mapeamento: {summary['taxa_mapeamento']:.1f}%"
-            )
-            _info(
-                f"[Recebimentos] Comissões geradas: {summary['total_comissoes_geradas']}"
-            )
-
-            # Avisar sobre documentos não mapeados
-            if not self.documentos_nao_mapeados_nf.empty:
-                _info(
-                    f"[AVISO] {len(self.documentos_nao_mapeados_nf)} documentos da Análise Financeira não encontrados na Análise Comercial"
-                )
-
-            # Log detalhado das estratégias de mapeamento
-            for log_entry in log_mapping:
-                if log_entry["status"] == "NAO_MAPEADO":
-                    if "processo" in log_entry:
-                        _debug(
-                            f"[AVISO] Recebimento não mapeado - Processo: {log_entry.get('processo')}, Valor: {log_entry.get('valor_recebido')}"
-                        )
-                    elif "documento" in log_entry:
-                        _debug(
-                            f"[AVISO] Pagamento não mapeado - Documento: {log_entry.get('documento')}, Valor: {log_entry.get('valor_pago')}"
-                        )
-
-            # Atualizar self.estado para compatibilidade
-            self.estado = self.state_manager.estado
-
-        except Exception as e:
-            self._log_validacao("ERRO", f"Erro ao processar recebimentos: {e}")
-            self.comissoes_recebimento_df = pd.DataFrame()
+        _info("[Recebimentos] Lógica antiga desativada. Aguardando nova implementação.")
+        self.comissoes_recebimento_df = pd.DataFrame()
+        # Mantém compatibilidade com estruturas usadas na geração de saída
+        self.documentos_nao_mapeados_nf = pd.DataFrame()
+        # Não altera estado aqui; nova lógica cuidará disso em serviços dedicados.
 
     def _executar_reconciliacoes(self):
         """
-        Executa reconciliações retroativas para processos quitados.
-
-        REFATORADO (FASE 4): Usa ReconciliationProcessor para reconciliações.
-
-        Processo:
-        - Busca processos elegíveis (Quitado + Faturado + Não Reconciliado)
-        - Carrega dados históricos do mês de faturamento
-        - Recalcula comissões com FC histórico
-        - Calcula saldo: comissão_correta - total_adiantado
-        - Marca processo como reconciliado
+        (LEGACY REMOVIDO) Lógica antiga de reconciliação desativada.
+        Nova reconciliação ocorrerá no mês do faturamento usando TCMP/FCMP por colaborador.
         """
-        _info("Iniciando reconciliações de comissões por recebimento...")
+        _info("Reconciliações (legado) desativadas. Aguardando nova implementação.")
         self.reconciliacao_detalhada_list = []
         self.reconciliacao_resumo_list = []
+        # Nova lógica será executada em etapa anterior aos cálculos de comissões.
 
+    # ------------------ Nova Lógica: Métricas & Reconciliação do Mês ------------------
+    def _reconciliar_e_calcular_metricas_do_mes(self):
+        """
+        Calcula e persiste TCMP/FCMP por colaborador para processos faturados no mês/ano de apuração.
+        Se houver adiantamentos acumulados, calcula o saldo de reconciliação do processo:
+            saldo_processo = sum_colab( TotalAdiantado * w_colab * (FCMP_colab - 1) )
+        onde w_colab é a proporção do TCMP do colaborador no processo.
+        """
         try:
-            # Setup do ReconciliationCalculator
-            calculator = ReconciliationCalculator(
-                analise_comercial_df=self.data.get(
-                    "ANALISE_COMERCIAL_COMPLETA", pd.DataFrame()
-                ),
-                fc_calculator_func=self._calcular_fc_historico_wrapper,  # Usa wrapper que aceita realizados históricos
+            df_anal = self.data.get("ANALISE_COMERCIAL_COMPLETA", pd.DataFrame())
+            if df_anal.empty:
+                _info("[Métricas/Reconciliação] Análise Comercial vazia; nada a processar.")
+                return
+
+            # Determinar mês/ano de apuração
+            try:
+                mes_param = int(self.params.get("mes_apuracao")) if self.params.get("mes_apuracao") else None
+                ano_param = int(self.params.get("ano_apuracao")) if self.params.get("ano_apuracao") else None
+            except Exception:
+                mes_param, ano_param = None, None
+
+            from utils.column_finder import ColumnFinder
+            finder = ColumnFinder(df_anal)
+            proc_col = finder.find_column(["processo", "id processo"])
+            dt_col = finder.find_column(["dt emissão", "dt emissao", "data emissão", "data emissao"])
+            status_col = finder.find_column(["status processo", "status"])
+
+            df_mes = df_anal.copy()
+            if dt_col and mes_param and ano_param:
+                try:
+                    datas = pd.to_datetime(df_mes[dt_col], errors="coerce")
+                    mask = (datas.dt.month == mes_param) & (datas.dt.year == ano_param)
+                    df_mes = df_mes[mask].copy()
+                except Exception:
+                    pass
+            # Filtrar somente Faturado quando coluna existir
+            if status_col:
+                try:
+                    df_mes = df_mes[df_mes[status_col].astype(str).str.strip().str.upper() == "FATURADO"]
+                except Exception:
+                    pass
+
+            if df_mes.empty or not proc_col:
+                _info("[Métricas/Reconciliação] Nenhum processo faturado para o período.")
+                return
+
+            processos = sorted(df_mes[proc_col].dropna().astype(str).str.strip().unique().tolist())
+            if not processos:
+                _info("[Métricas/Reconciliação] Nenhum processo elegível encontrado.")
+                return
+
+            # Preparar calculadora de métricas
+            metrics_calc = ProcessMetricsCalculator(
+                analise_comercial_df=self.data.get("ANALISE_COMERCIAL_COMPLETA", pd.DataFrame()),
                 regras_comissao_getter=self._get_regra_comissao,
+                fc_calculator_func=self._calcular_fc_para_item,  # usa FC corrente (não histórico)
                 colaboradores_df=self.data.get("COLABORADORES", pd.DataFrame()),
                 atribuicoes_df=self.data.get("ATRIBUICOES", pd.DataFrame()),
                 recebe_por_recebimento_ids=self.recebe_por_recebimento,
-                base_path=self.base_path,
             )
 
-            # Setup do ReconciliationProcessor
-            processor = ReconciliationProcessor(
-                state_manager=self.state_manager, reconciliation_calculator=calculator
-            )
+            resumo_list = []
+            for proc in processos:
+                try:
+                    tcmp_dict, fcmp_dict = metrics_calc.calculate_for_process(proc)
 
-            # Processar todas as reconciliações elegíveis
-            detalhada_df, resumo_df = processor.process_all_eligible()
-
-            # Armazenar para saída
-            self.reconciliacao_detalhada_list = (
-                detalhada_df.to_dict("records") if not detalhada_df.empty else []
-            )
-            self.reconciliacao_resumo_list = (
-                resumo_df.to_dict("records") if not resumo_df.empty else []
-            )
-
-            # Log resumo
-            if not resumo_df.empty:
-                summary = processor.get_processing_summary(resumo_df)
-                _info(f"[Reconciliação] Processos: {summary['total_processos']}")
-                _info(
-                    f"[Reconciliação] Comissão correta total: R$ {summary['comissao_correta_total']:.2f}"
-                )
-                _info(
-                    f"[Reconciliação] Saldo final: R$ {summary['saldo_final_total']:.2f}"
-                )
-
-                # Log processos que requerem pagamento
-                requiring = processor.get_processes_requiring_payment(resumo_df)
-                if not requiring.empty:
-                    _info(
-                        f"[Reconciliação] {len(requiring)} processo(s) requerem pagamento adicional"
+                    # Persistir métricas em estado
+                    mes_ano = f"{ano_param or ''}-{(mes_param or 0):02d}" if (mes_param and ano_param) else None
+                    self.state_manager.update_process_metrics(
+                        proc, mes_ano, tcmp_dict, fcmp_dict, status_calculo_medias="REALIZADO"
                     )
 
-                # Log processos com pagamento excessivo
-                overpaid = processor.get_processes_with_overpayment(resumo_df)
-                if not overpaid.empty:
-                    _info(
-                        f"[Reconciliação] {len(overpaid)} processo(s) com pagamento a maior"
-                    )
-            else:
-                _info("[Reconciliação] Nenhum processo elegível para reconciliação")
+                    # Caso exista adiantamento acumulado, calcular saldo de reconciliação
+                    state = self.state_manager.get_process_state(proc) or {}
+                    total_adiantado = float(state.get("TOTAL_ADIANTADO_COMISSAO", 0.0) or 0.0)
+                    if total_adiantado > 0:
+                        # Peso proporcional por TCMP
+                        soma_tcmp = sum(v for v in tcmp_dict.values() if v is not None)
+                        saldo_total = 0.0
+                        if soma_tcmp > 0:
+                            for colab, fcmp in fcmp_dict.items():
+                                w = (tcmp_dict.get(colab, 0.0) or 0.0) / soma_tcmp
+                                saldo_total += total_adiantado * w * (float(fcmp or 0.0) - 1.0)
+                        else:
+                            # Sem TCMP distribuível, aplicar FCMP médio simples
+                            if fcmp_dict:
+                                media_fcmp = sum(fcmp_dict.values()) / max(len(fcmp_dict), 1)
+                            else:
+                                media_fcmp = 1.0
+                            saldo_total = total_adiantado * (media_fcmp - 1.0)
 
-            # Atualizar self.estado para compatibilidade
-            self.estado = self.state_manager.estado
+                        resumo_list.append(
+                            {
+                                "PROCESSO": proc,
+                                "COMISSAO_CORRETA_TOTAL": None,  # não aplicável na nova lógica
+                                "TOTAL_ADIANTAMENTOS_PAGOS": total_adiantado,
+                                "SALDO_FINAL_RECONCILIACAO": saldo_total,
+                            }
+                        )
+                except Exception as e_proc:
+                    self._log_validacao("AVISO", f"Falha ao calcular métricas para processo {proc}: {e_proc}", {})
+                    continue
 
+            # Disponibilizar para a aba RECONCILIACAO (resumo)
+            self.reconciliacao_resumo_list = resumo_list
         except Exception as e:
-            self._log_validacao("ERRO", f"Erro ao executar reconciliações: {e}")
-            self.reconciliacao_detalhada_list = []
+            self._log_validacao("ERRO", f"Erro em métricas/reconciliação do mês: {e}", {})
             self.reconciliacao_resumo_list = []
+
+    def _calcular_comissoes_recebimento_nova_logica(self):
+        """
+        Calcula comissões por recebimento segundo a nova lógica (TCMP/FCMP).
+        - Antecipações (COTxxx): comissão = valor * TCMP_temporária (FC=1.0)
+        - Pagamentos regulares: comissão = valor * TCMP * FCMP (métricas salvas no estado)
+        """
+        try:
+            loader = FinancialPaymentsLoader()
+            path_fin = os.path.join(self.base_path, "Análise Financeira.xlsx")
+            pagamentos = loader.load_from_file(path_fin)
+            if pagamentos.empty:
+                self.comissoes_recebimento_df = pd.DataFrame()
+                return
+
+            df_anal = self.data.get("ANALISE_COMERCIAL_COMPLETA", pd.DataFrame())
+            colaboradores_df = self.data.get("COLABORADORES", pd.DataFrame())
+            atribuicoes_df = self.data.get("ATRIBUICOES", pd.DataFrame())
+
+            # Auxiliares
+            from utils.column_finder import ColumnFinder
+            anal_finder = ColumnFinder(df_anal) if not df_anal.empty else None
+            nf_col = anal_finder.find_column(["numero nf", "número nf", "num nf"]) if anal_finder else None
+            proc_col = anal_finder.find_column(["processo", "id processo"]) if anal_finder else None
+
+            def get_cargo(nome: str) -> Optional[str]:
+                if colaboradores_df is None or colaboradores_df.empty or not nome:
+                    return None
+                row = colaboradores_df[colaboradores_df["nome_colaborador"] == nome]
+                return row.iloc[0].get("cargo") if not row.empty else None
+
+            # Calculadora de métricas para TCMP temporária (FC=1.0)
+            def _fc_constante(_n, _c, _item, *_args, **_kwargs):
+                return 1.0, {}
+
+            metrics_calc_temp = ProcessMetricsCalculator(
+                analise_comercial_df=df_anal,
+                regras_comissao_getter=self._get_regra_comissao,
+                fc_calculator_func=_fc_constante,
+                colaboradores_df=colaboradores_df,
+                atribuicoes_df=atribuicoes_df,
+                recebe_por_recebimento_ids=self.recebe_por_recebimento,
+            )
+
+            linhas = []
+
+            for _, row in pagamentos.iterrows():
+                tipo = row.get("TIPO_PAGAMENTO")
+                valor = float(row.get("VALOR_PAGO", 0.0) or 0.0)
+                if valor == 0:
+                    continue
+
+                if tipo == "Antecipação":
+                    processo = str(row.get("PROCESSO") or "").strip()
+                    if not processo:
+                        continue
+                    # Calcular TCMP temporária (FC=1.0)
+                    tcmp_dict, _ = metrics_calc_temp.calculate_for_process(processo)
+                    total_comissao = 0.0
+                    for nome, tcmp in tcmp_dict.items():
+                        cargo = get_cargo(nome)
+                        comissao = valor * float(tcmp or 0.0)
+                        total_comissao += comissao
+                        linhas.append(
+                            {
+                                "id_colaborador": None,
+                                "nome_colaborador": nome,
+                                "cargo": cargo,
+                                "processo": processo,
+                                "faturamento_item": valor,
+                                "taxa_rateio_aplicada": None,
+                                "percentual_elegibilidade_pe": None,
+                                "fator_correcao_fc": 1.0,
+                                "comissao_calculada": comissao,
+                                "tipo_lancamento": "Antecipação",
+                                "observacao": "Nova lógica (TCMP temporária; FC=1.0)",
+                            }
+                        )
+                    # Atualizar estado (valores pagos + comissões adiantadas)
+                    self.state_manager.update_payment_advanced(processo, valor)
+                    if total_comissao > 0:
+                        self.state_manager.update_commission_advanced(processo, total_comissao)
+
+                else:
+                    # Pagamento Regular - mapear por DOCUMENTO_NORMALIZADO -> NUMERO NF -> PROCESSO
+                    processo = None
+                    if nf_col and proc_col:
+                        doc6 = str(row.get("DOCUMENTO_NORMALIZADO") or "").strip()
+                        if doc6:
+                            try:
+                                nfs = df_anal[nf_col].astype(str).str.replace(r"\D", "", regex=True)
+                                mask = nfs.str.contains(doc6, na=False)
+                                candidatos = df_anal[mask]
+                                if not candidatos.empty:
+                                    processo = str(candidatos.iloc[0][proc_col]).strip()
+                            except Exception:
+                                processo = None
+                    if not processo:
+                        continue
+
+                    metrics = self.state_manager.get_process_metrics(processo) or {}
+                    tcmp_dict = metrics.get("TCMP", {}) or {}
+                    fcmp_dict = metrics.get("FCMP", {}) or {}
+                    if not tcmp_dict:
+                        # Fallback: calcular agora (processo já faturado)
+                        tcmp_dict, fcmp_dict = ProcessMetricsCalculator(
+                            analise_comercial_df=df_anal,
+                            regras_comissao_getter=self._get_regra_comissao,
+                            fc_calculator_func=self._calcular_fc_para_item,
+                            colaboradores_df=colaboradores_df,
+                            atribuicoes_df=atribuicoes_df,
+                            recebe_por_recebimento_ids=self.recebe_por_recebimento,
+                        ).calculate_for_process(processo)
+                        self.state_manager.update_process_metrics(
+                            processo, None, tcmp_dict, fcmp_dict, status_calculo_medias="REALIZADO"
+                        )
+
+                    for nome, tcmp in tcmp_dict.items():
+                        cargo = get_cargo(nome)
+                        fcmp = float((fcmp_dict.get(nome) or 0.0))
+                        comissao = valor * float(tcmp or 0.0) * fcmp
+                        linhas.append(
+                            {
+                                "id_colaborador": None,
+                                "nome_colaborador": nome,
+                                "cargo": cargo,
+                                "processo": processo,
+                                "faturamento_item": valor,
+                                "taxa_rateio_aplicada": None,
+                                "percentual_elegibilidade_pe": None,
+                                "fator_correcao_fc": fcmp,
+                                "comissao_calculada": comissao,
+                                "tipo_lancamento": "Pagamento Regular",
+                                "observacao": "Nova lógica (TCMP*FCMP)",
+                            }
+                        )
+                    # Atualizar estado (valor pago regular)
+                    self.state_manager.update_payment_regular(processo, valor)
+
+            self.comissoes_recebimento_df = pd.DataFrame(linhas) if linhas else pd.DataFrame()
+            # Manter snapshot do estado
+            self.estado = self.state_manager.estado
+        except Exception as e:
+            self._log_validacao("ERRO", f"Erro no cálculo de comissões por recebimento (nova lógica): {e}")
+            self.comissoes_recebimento_df = pd.DataFrame()
 
     def _get_regra_comissao(self, linha, grupo, subgrupo, tipo_mercadoria, cargo):
         """Busca a regra de comissão aplicável considerando hierarquia de especificidade."""
@@ -4101,22 +4190,22 @@ class CalculoComissao:
         _phase("4. Calculando valores realizados agregados...")
         with _timer_ctx("Calcular valores realizados", _safe_percent("realizado")):
             self._calcular_realizado()
-        _phase("5. Calculando comissões e FC item a item...")
+        # Carregar estado antes das métricas/reconciliação
+        _phase("5. Carregando estado de processos...")
+        with _timer_ctx("Carregar estado", _safe_percent("estado_adiant")):
+            self._carregar_estado()
+        # Nova ordem: primeiro métricas + reconciliação (mês do faturamento)
+        _phase("5.1 Calculando TCMP/FCMP por processo e reconciliações do mês...")
+        with _timer_ctx("Métricas e reconciliação do mês", _safe_percent("reconciliacoes")):
+            self._reconciliar_e_calcular_metricas_do_mes()
+        # Em seguida, comissões de recebimento (usa TCMP/FCMP quando disponível)
+        _phase("5.2 Calculando comissões por recebimento (nova lógica)...")
+        with _timer_ctx("Comissões por recebimento", _safe_percent("estado_adiant")):
+            self._calcular_comissoes_recebimento_nova_logica()
+        # Por fim, comissões por faturamento (lógica existente, item a item)
+        _phase("5.3 Calculando comissões e FC item a item (faturamento)...")
         with _timer_ctx("Calcular comissões e FC", _safe_percent("comissoes")):
             self._calcular_comissoes()
-        # Carregar estado (se existir) e processar recebimentos/reconciliações
-        _phase(
-            "5.1 Carregando estado de recebimentos e aplicando adiantamentos (se houver)..."
-        )
-        with _timer_ctx(
-            "Carregar estado e aplicar adiantamentos",
-            _safe_percent("estado_adiant"),
-        ):
-            self._carregar_estado()
-            self._aplicar_adiantamentos_recebimentos()
-        _phase("5.2 Executando reconciliações de processos quitados...")
-        with _timer_ctx("Executar reconciliações", _safe_percent("reconciliacoes")):
-            self._executar_reconciliacoes()
         _phase("6. Gerando arquivos de saída...")
         with _timer_ctx("Gerar arquivos de saída", _safe_percent("saida")):
             self._gerar_saida()

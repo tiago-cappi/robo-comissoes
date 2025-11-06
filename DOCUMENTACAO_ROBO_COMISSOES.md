@@ -1,6 +1,6 @@
 ﻿**Visão Geral**
-- Robô que calcula comissões por faturamento, por recebimento e reconciliações retroativas por processo, gerando um Excel consolidado com planilhas de cálculo, resumo e depuração, além de um PDF opcional de detalhamento.
-- Fluxo de alto nível: carrega dados → normaliza/parametriza → calcula “realizados” → calcula comissões de faturamento (item a item) → aplica adiantamentos por recebimento → executa reconciliações retroativas (quando quitado e faturado) → gera saídas (Excel + PDF + logs).
+- Robô que calcula comissões por faturamento (item a item), comissões por recebimento (a nível de processo via médias ponderadas) e reconciliações no mês do faturamento, gerando um Excel consolidado (cálculo, resumo e depuração) e um PDF opcional.
+- Fluxo de alto nível (nova lógica): carrega dados → normaliza/parametriza → calcula “realizados” → calcula métricas TCMP/FCMP e reconciliações do mês → calcula comissões por recebimento (usando TCMP/FCMP) → calcula comissões por faturamento (item a item; inalterado) → gera saídas (Excel + PDF + logs).
 
 **Arquivos De Entrada**
 - `Regras_Comissoes.xlsx` (obrigatório):
@@ -19,9 +19,10 @@
 - `Conversões*.xlsx|csv` (opcional): orçamentos, usados nos componentes de conversão.
 - `Rentabilidade_Realizada_*.xlsx` (obrigatório para rentabilidade): rentabilidade efetiva por (linha, Grupo, Subgrupo, Tipo de Mercadoria). Alternativamente, arquivos históricos em `rentabilidades/rentabilidade_{MM}_{AAAA}_agrupada.(xlsx|csv)` para reconciliação.
 - `Faturados_YTD_*.xlsx` (opcional): base para metas de fornecedor YTD por moeda/fabricante.
-- `Recebimentos_do_Mes.xlsx` (opcional): recebimentos com colunas `PROCESSO`, `VALOR_RECEBIDO`, `DATA_RECEBIMENTO`, `ID_CLIENTE`.
-- `Status_Pagamentos_Processos.xlsx` (opcional): status por processo; colunas como `PROCESSO`, `VALOR_ORIGINAL`, `STATUS_PAGAMENTO` (ex.: “Quitado”).
 - `Estado_Processos_Recebimento.xlsx` (opcional): espelho persistente do estado, com planilha `ESTADO`.
+- `Análise Financeira.xlsx` (obrigatório para recebimentos): fonte única de pagamentos (adiantamentos e parcelas). Regras de vinculação:
+  - Se `Documento` começar com `COT`: é Adiantamento; `PROCESSO` = sufixo numérico após `COT` (ex.: `COT123456` → `123456`).
+  - Caso contrário: Pagamento Regular; `DOCUMENTO_NORMALIZADO` = 6 primeiros dígitos do `Documento`, vinculado à coluna `Numero NF` na Análise Comercial.
 
 **Normalização E Pré‑Processamento**
 - Leitura “tolerante” dos insumos (CSV/Excel), com limpeza básica de strings: trim em nomes/colunas; aplicação de `ALIASES` em “Consultor Interno” e “Representante-pedido”.
@@ -81,38 +82,40 @@
   - Auditoria FC: `peso_fat_linha`, `realizado_fat_linha`, `meta_fat_linha`, `ating_fat_linha`, `ating_cap_fat_linha`, `comp_fc_fat_linha` (idem para `conv_linha`, `fat_ind`, `conv_ind`, `rentab`, e, se houver, `retencao`, `forn1`, `forn2` + `moeda_forn1/forn2`).
 - Remoção de linhas dos colaboradores “que recebem por recebimento” da aba principal para não duplicar pagamento (eles aparecem na aba de recebimento).
 
-**Adiantamentos Por Recebimento (COMISSOES_RECEBIMENTO)**
-- Mapeia cada recebimento (`RECEBIMENTOS`) a um processo na `ANALISE_COMERCIAL_COMPLETA` (exato, substring, cliente+valor aproximado, truncamento numérico) e extrai contexto do processo.
-- Identifica colaboradores do processo que “recebem por recebimento” (gestão/operacional conforme regras/atribuições).
-- Fórmula (por linha): `comissao_calculada = VALOR_RECEBIDO * taxa_rateio * pe` (aqui FC=1.0).
-- Colunas: `id_colaborador`, `nome_colaborador`, `cargo`, `processo`, `linha`, `grupo`, `subgrupo`, `tipo_mercadoria`, `faturamento_item` (valor recebido), `taxa_rateio_aplicada`, `percentual_elegibilidade_pe`, `fator_correcao_fc` (=1.0), `comissao_calculada`, `tipo_lancamento`, `observacao` (+ campos auxiliares de mapeamento, quando presentes).
-- Atualiza `ESTADO`:
-  - Cria/atualiza linha do processo: `VALOR_TOTAL_PROCESSO`, `TOTAL_PAGO_ACUMULADO += VALOR_RECEBIDO`, `TOTAL_ADIANTADO_COMISSAO += soma_comissao_recebimento_do_mes` (acumulativo), `STATUS_PAGAMENTO` (do arquivo `Status_Pagamentos_Processos`), `ULTIMA_ATUALIZACAO`.
+**Comissões Por Recebimento (Nova Lógica - COMISSOES_RECEBIMENTO)**
+- Sempre calculadas a nível de processo usando médias ponderadas:
+  - `TCMP` (Taxa de Comissão Média Ponderada por colaborador): média ponderada pelo valor do item das taxas por item (`taxa_rateio_maximo_pct * fatia_cargo_pct`).
+  - `FCMP` (Fator de Correção Médio Ponderado por colaborador): média ponderada pelo valor do item dos FCs por item (capados por `cap_fc_max`).
+- Antes do faturamento (Adiantamentos; `Documento` iniciando com `COT`):
+  - Comissão por colaborador: `comissao = valor_adiantado * TCMP_colaborador` (FC=1.0).
+  - Atualiza `ESTADO`: `TOTAL_ANTECIPACOES`/`TOTAL_PAGO_ACUMULADO` (valor) e `TOTAL_ADIANTADO_COMISSAO` (soma das comissões pagas no adiantamento).
+- Após o faturamento (Pagamentos Regulares):
+  - Comissão por colaborador: `comissao = valor_parcela * TCMP_colaborador * FCMP_colaborador` (métricas salvas no estado no mês do faturamento).
 
 **Estado Dos Processos (ESTADO)**
-- Colunas: `PROCESSO`, `VALOR_TOTAL_PROCESSO`, `TOTAL_PAGO_ACUMULADO`, `TOTAL_ADIANTADO_COMISSAO`, `STATUS_PAGAMENTO`, `STATUS_RECONCILIACAO`, `STATUS_PROCESSO_ANALISE`, `ULTIMA_ATUALIZACAO`.
+- Colunas principais:
+  - `PROCESSO`, `VALOR_TOTAL_PROCESSO`, `TOTAL_ANTECIPACOES`, `TOTAL_PAGAMENTOS_REGULARES`, `TOTAL_PAGO_ACUMULADO`, `TOTAL_ADIANTADO_COMISSAO`,
+  - `STATUS_PAGAMENTO`, `STATUS_RECONCILIACAO`, `STATUS_PROCESSO_ANALISE`,
+  - `STATUS_CALCULO_MEDIAS`, `MES_ANO_FATURAMENTO`, `TCMP` (JSON por colaborador), `FCMP` (JSON por colaborador),
+  - `ULTIMA_ATUALIZACAO`.
 - Persistência: lê/escreve `Estado_Processos_Recebimento.xlsx` (planilha `ESTADO`).
 
-**Reconciliação Retroativa (RECONCILIACAO)**
-- Gatilho por processo: `STATUS_PAGAMENTO == 'Quitado'` e `STATUS_PROCESSO_ANALISE == 'Faturado'`, e `STATUS_RECONCILIACAO` não “Realizada/Concluida”.
-- Para o mês/ano de emissão do processo:
-  - Usa `preparar_dados_mensais.prepare_dataframes_for_month(mm, aaaa)` para montar os “realizados” históricos (faturados, conversões, YTD, retenção).
-  - Carrega `rentabilidades/rentabilidade_{MM}_{AAAA}_agrupada.(xlsx|csv)`; normaliza e monta séries históricas.
-  - Troca temporariamente `self.realizado` pelos históricos e recalcúla item a item, mas somente para colaboradores “que recebem por recebimento”.
-  - Gera linhas detalhadas item-a-item (mesmas colunas de COMISSOES_CALCULADAS) e um resumo por processo: `COMISSAO_CORRETA_TOTAL`, `TOTAL_ADIANTAMENTOS_PAGOS`, `SALDO_FINAL_RECONCILIACAO`.
-- Atualiza `ESTADO.STATUS_RECONCILIACAO = 'Realizada'` em sucesso.
+**Reconciliação (no mês do Faturamento)**
+- Gatilho: o processo aparece como `FATURADO` na Análise Comercial para o mês/ano de apuração.
+- Ações para todo processo faturado:
+  - Calcular e persistir `TCMP` e `FCMP` por colaborador (para uso em parcelas futuras).
+- Reconciliação somente se houve adiantamentos:
+  - `Saldo de Reconciliação (processo)` = soma_{colab}(`Total_Adiantado` × w_colab × (`FCMP_colab` − 1)), onde w_colab é a proporção do `TCMP_colab` no processo.
+  - O saldo (≤ 0; pois `cap_fc_max` ≤ 1) é aplicado no mês do faturamento e exibido no resumo.
 
 **Saída (Excel + PDF)**
 - Excel (`Comissoes_Calculadas_YYYYMMDD_HHMMSS.xlsx`):
-  - `COMISSOES_CALCULADAS`: comissões de faturamento (sem os “recebimento-only”).
-  - `RESUMO_COLABORADOR`: soma por colaborador (faturamento + recebimento).
-  - `COMISSOES_RECEBIMENTO`: uma linha por pagamento mapeado; inclui contexto e, quando disponível, data de recebimento.
-  - `RECONCILIACAO`: seção detalhada (linhas item-a-item) e, algumas linhas abaixo, tabela de resumo por processo.
-  - `VALIDACAO`: log das mensagens de validação/aviso/erro.
-  - `DEBUG_*`: visões auxiliares (ex.: `DEBUG_RECEBIMENTOS_RAW`, `DEBUG_RECEBIMENTOS`, `DEBUG_ENV`, `DEBUG_ANALISE_*`, `DEBUG_FORNECEDORES`).
-  - `CROSS_SELLING_DECISIONS`: histórico de decisões (quando houver).
-  - `ESTADO`: snapshot do estado atualizado.
-- PDF (opcional, requer `reportlab`): relatório por item com explicações: regra aplicada, FC (componentes), fórmulas e valores.
+  - `COMISSOES_CALCULADAS`: comissões de faturamento (item a item).
+  - `RESUMO_COLABORADOR`: soma por colaborador (faturamento + recebimento + ajustes de reconciliação).
+  - `COMISSOES_RECEBIMENTO`: linhas por pagamento (adiantamento: TCMP; parcela: TCMP*FCMP).
+  - `RECONCILIACAO`: resumo por processo com saldos aplicados no mês do faturamento.
+  - `VALIDACAO` e `ESTADO`: logs e snapshot do estado.
+- PDF (opcional, requer `reportlab`): relatório por item (faturamento).
 
 **Parâmetros (PARAMS)**
 - Chaves relevantes:
@@ -137,8 +140,7 @@
 
 **Execução**
 - Passos típicos:
-  - Rodar scripts de limpeza para o mês/ano desejado (geram `Recebimentos_do_Mes.xlsx` e `Status_Pagamentos_Processos.xlsx`).
-  - Executar o robô (interativo): informar mês/ano → o robô roda o preparador em modo validação → carrega dados → executa cálculos → salva Excel e, opcionalmente, PDF.
+  - Executar o robô (interativo): informar mês/ano → carregar dados → calcular realizados → calcular métricas/reconciliações (mês) → comissões por recebimento → comissões por faturamento → gerar Excel/PDF.
 - Saídas são gravadas na raiz do projeto; o nome do Excel inclui timestamp.
 
 **Diagnóstico E Depuração**
@@ -147,7 +149,11 @@
 - Utilize os DEBUG_* para checar headers, amostras e ambiente (linhas e colaboradores marcados como recebimento).
 
 **Fórmulas‑Chave**
-- `comissao_potencial_maxima = faturamento_item * taxa_rateio_aplicada * percentual_elegibilidade_pe`
-- `comissao_calculada = comissao_potencial_maxima * fator_correcao_fc`
-- Recebimento: `comissao_calculada = valor_recebido * taxa_rateio_aplicada * percentual_elegibilidade_pe` (FC=1.0)
-- Reconciliação: igual ao faturamento, mas com `self.realizado` substituído por séries históricas do mês/ano do faturamento.
+- Faturamento (inalterado): 
+  - `comissao_potencial_maxima = faturamento_item * taxa_rateio_aplicada * percentual_elegibilidade_pe`
+  - `comissao_calculada = comissao_potencial_maxima * fator_correcao_fc`
+- Recebimento (nova lógica):
+  - Adiantamento: `comissao = valor_adiantado * TCMP_colaborador` (FC=1.0)
+  - Parcela pós-faturamento: `comissao = valor_parcela * TCMP_colaborador * FCMP_colaborador`
+- Reconciliação (mês do faturamento; somente se houve adiantamentos):
+  - `saldo_processo = Σ_colab ( Total_Adiantado × w_colab × (FCMP_colab − 1) )`, onde `w_colab = TCMP_colab / Σ(TCMP)`.

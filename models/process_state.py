@@ -27,6 +27,11 @@ ESTADO_COLUMNS = [
     'STATUS_PAGAMENTO',
     'STATUS_RECONCILIACAO',
     'STATUS_PROCESSO_ANALISE',
+    # Novas colunas para a nova lógica de recebimentos/reconciliação
+    'STATUS_CALCULO_MEDIAS',       # PENDENTE | REALIZADO
+    'MES_ANO_FATURAMENTO',         # YYYY-MM (string)
+    'TCMP',                        # JSON string por colaborador
+    'FCMP',                        # JSON string por colaborador
     'ULTIMA_ATUALIZACAO'
 ]
 
@@ -90,6 +95,16 @@ class ProcessStateManager:
         # Normalizar status (converter nan para None)
         if 'STATUS_PAGAMENTO' in df.columns:
             df['STATUS_PAGAMENTO'] = df['STATUS_PAGAMENTO'].astype(str).replace({'nan': None})
+        if 'STATUS_RECONCILIACAO' in df.columns:
+            df['STATUS_RECONCILIACAO'] = df['STATUS_RECONCILIACAO'].astype(str).replace({'nan': None})
+        if 'STATUS_CALCULO_MEDIAS' in df.columns:
+            df['STATUS_CALCULO_MEDIAS'] = df['STATUS_CALCULO_MEDIAS'].astype(str).replace({'nan': None})
+        if 'MES_ANO_FATURAMENTO' in df.columns:
+            df['MES_ANO_FATURAMENTO'] = df['MES_ANO_FATURAMENTO'].astype(str).replace({'nan': None})
+        # Garantir strings para JSONs (ou None)
+        for json_col in ['TCMP', 'FCMP']:
+            if json_col in df.columns:
+                df[json_col] = df[json_col].apply(lambda v: None if pd.isna(v) else str(v))
         
         return df
     
@@ -215,6 +230,10 @@ class ProcessStateManager:
                 'STATUS_PAGAMENTO': status_pagamento,
                 'STATUS_RECONCILIACAO': 'Nao Realizada',
                 'STATUS_PROCESSO_ANALISE': None,
+                'STATUS_CALCULO_MEDIAS': 'PENDENTE',
+                'MES_ANO_FATURAMENTO': None,
+                'TCMP': None,
+                'FCMP': None,
                 'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
             }
             self.estado = pd.concat([self.estado, pd.DataFrame([nova_linha])], ignore_index=True, sort=False)
@@ -274,6 +293,10 @@ class ProcessStateManager:
                 'STATUS_PAGAMENTO': status_pagamento,
                 'STATUS_RECONCILIACAO': 'Nao Realizada',
                 'STATUS_PROCESSO_ANALISE': None,
+                'STATUS_CALCULO_MEDIAS': 'PENDENTE',
+                'MES_ANO_FATURAMENTO': None,
+                'TCMP': None,
+                'FCMP': None,
                 'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
             }
             self.estado = pd.concat([self.estado, pd.DataFrame([nova_linha])], ignore_index=True, sort=False)
@@ -338,6 +361,10 @@ class ProcessStateManager:
                 'STATUS_PAGAMENTO': status_pagamento,
                 'STATUS_RECONCILIACAO': 'Nao Realizada',
                 'STATUS_PROCESSO_ANALISE': None,
+                'STATUS_CALCULO_MEDIAS': 'PENDENTE',
+                'MES_ANO_FATURAMENTO': None,
+                'TCMP': None,
+                'FCMP': None,
                 'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
             }
             self.estado = pd.concat([self.estado, pd.DataFrame([nova_linha])], ignore_index=True, sort=False)
@@ -398,6 +425,10 @@ class ProcessStateManager:
                 'STATUS_PAGAMENTO': None,
                 'STATUS_RECONCILIACAO': 'Nao Realizada',
                 'STATUS_PROCESSO_ANALISE': None,
+                'STATUS_CALCULO_MEDIAS': 'PENDENTE',
+                'MES_ANO_FATURAMENTO': None,
+                'TCMP': None,
+                'FCMP': None,
                 'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
             }
             self.estado = pd.concat([self.estado, pd.DataFrame([nova_linha])], ignore_index=True, sort=False)
@@ -456,6 +487,86 @@ class ProcessStateManager:
             idx = indices[0]
             self.estado.at[idx, 'STATUS_RECONCILIACAO'] = 'Realizada'
             self.estado.at[idx, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
+    
+    def update_process_metrics(self, processo_id,
+                               mes_ano_faturamento: Optional[str],
+                               tcmp_por_colaborador: Optional[Dict[str, float]],
+                               fcmp_por_colaborador: Optional[Dict[str, float]],
+                               status_calculo_medias: Optional[str] = 'REALIZADO') -> None:
+        """
+        Atualiza as métricas TCMP/FCMP por colaborador para um processo.
+        
+        Args:
+            processo_id: ID do processo
+            mes_ano_faturamento: 'YYYY-MM'
+            tcmp_por_colaborador: dict {nome_colab: tcmp_float}
+            fcmp_por_colaborador: dict {nome_colab: fcmp_float}
+            status_calculo_medias: 'PENDENTE' | 'REALIZADO'
+        """
+        import json
+        proc_normalized = normalize_process_id(processo_id)
+        if proc_normalized is None:
+            return
+        
+        mask = self.estado['PROCESSO'].astype(str).str.strip() == proc_normalized
+        indices = self.estado[mask].index
+        
+        if len(indices) == 0:
+            # Criar base se não existir
+            nova_linha = {
+                'PROCESSO': proc_normalized,
+                'VALOR_TOTAL_PROCESSO': 0.0,
+                'TOTAL_ANTECIPACOES': 0.0,
+                'TOTAL_PAGAMENTOS_REGULARES': 0.0,
+                'TOTAL_PAGO_ACUMULADO': 0.0,
+                'TOTAL_ADIANTADO_COMISSAO': 0.0,
+                'STATUS_PAGAMENTO': None,
+                'STATUS_RECONCILIACAO': 'Nao Realizada',
+                'STATUS_PROCESSO_ANALISE': None,
+                'STATUS_CALCULO_MEDIAS': status_calculo_medias,
+                'MES_ANO_FATURAMENTO': mes_ano_faturamento,
+                'TCMP': json.dumps(tcmp_por_colaborador or {}, ensure_ascii=False),
+                'FCMP': json.dumps(fcmp_por_colaborador or {}, ensure_ascii=False),
+                'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
+            }
+            self.estado = pd.concat([self.estado, pd.DataFrame([nova_linha])], ignore_index=True, sort=False)
+        else:
+            idx = indices[0]
+            if mes_ano_faturamento is not None:
+                self.estado.at[idx, 'MES_ANO_FATURAMENTO'] = mes_ano_faturamento
+            if tcmp_por_colaborador is not None:
+                self.estado.at[idx, 'TCMP'] = json.dumps(tcmp_por_colaborador, ensure_ascii=False)
+            if fcmp_por_colaborador is not None:
+                self.estado.at[idx, 'FCMP'] = json.dumps(fcmp_por_colaborador, ensure_ascii=False)
+            if status_calculo_medias is not None:
+                self.estado.at[idx, 'STATUS_CALCULO_MEDIAS'] = status_calculo_medias
+            self.estado.at[idx, 'ULTIMA_ATUALIZACAO'] = datetime.now().isoformat()
+    
+    def get_process_metrics(self, processo_id) -> Optional[Dict]:
+        """
+        Retorna métricas TCMP/FCMP por colaborador e metadados de faturamento.
+        
+        Returns:
+            dict com chaves: 'TCMP' (dict), 'FCMP' (dict), 'MES_ANO_FATURAMENTO' (str), 'STATUS_CALCULO_MEDIAS' (str)
+        """
+        import json
+        state = self.get_process_state(processo_id)
+        if state is None:
+            return None
+        try:
+            tcmp = json.loads(state.get('TCMP') or '{}')
+        except Exception:
+            tcmp = {}
+        try:
+            fcmp = json.loads(state.get('FCMP') or '{}')
+        except Exception:
+            fcmp = {}
+        return {
+            'TCMP': tcmp,
+            'FCMP': fcmp,
+            'MES_ANO_FATURAMENTO': state.get('MES_ANO_FATURAMENTO'),
+            'STATUS_CALCULO_MEDIAS': state.get('STATUS_CALCULO_MEDIAS')
+        }
     
     def get_eligible_for_reconciliation(self) -> pd.DataFrame:
         """
