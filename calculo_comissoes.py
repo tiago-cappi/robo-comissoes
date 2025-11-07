@@ -13,6 +13,8 @@ import re
 import sys
 import atexit
 from contextlib import contextmanager
+from typing import Optional, Dict
+import json
 
 import os, sys
 
@@ -419,10 +421,8 @@ ARQUIVO_FATURADOS_YTD = None
 # FORÇAR DEBUG TEMPORARIAMENTE (será desativado após a execução)
 FORCE_DEBUG_TERMINAL = False
 
-# Nome do arquivo de saída
-NOME_ARQUIVO_SAIDA = "Comissoes_Calculadas_{}.xlsx".format(
-    datetime.now().strftime("%Y%m%d_%H%M%S")
-)
+# Nome do arquivo de saída (será gerado dinamicamente em _gerar_saida_impl)
+NOME_ARQUIVO_SAIDA = None
 
 
 class CalculoComissao:
@@ -454,12 +454,56 @@ class CalculoComissao:
         self.estado = pd.DataFrame()
         # NOVO (FASE 6): DataFrame para documentos não mapeados da Análise Financeira
         self.documentos_nao_mapeados_nf = pd.DataFrame()
+        # NOVO (DEBUG): Dicionário para armazenar logs de eventos por processo
+        # Estrutura: {processo_id: [lista de strings de eventos]}
+        self.logs_eventos_por_processo = {}
+        # NOVO (DEBUG): Dicionário para armazenar pagamentos processados por processo
+        # Estrutura: {processo_id: [lista de dicts com detalhes do pagamento]}
+        self.pagamentos_processados_por_processo = {}
+        # NOVO (DEBUG): DataFrame com pagamentos normalizados do FinancialPaymentsLoader
+        self.pagamentos_financeiro_normalizados = pd.DataFrame()
 
     def _log_validacao(self, nivel, mensagem, contexto={}):
         """Adiciona uma entrada ao log de validação."""
         self.validation_log.append(
             {"Nível": nivel, "Mensagem": mensagem, "Contexto": str(contexto)}
         )
+    
+    def _adicionar_log_evento(self, processo: str, evento: str, detalhes: Optional[Dict] = None):
+        """
+        Adiciona um evento ao log cronológico de um processo.
+        
+        Args:
+            processo: ID do processo
+            evento: Descrição do evento (ex: "Pagamento processado", "Métricas calculadas")
+            detalhes: Dicionário opcional com detalhes adicionais
+        """
+        try:
+            processo_str = str(processo).strip() if processo else None
+            if not processo_str:
+                return
+            
+            # Inicializar lista se não existir
+            if processo_str not in self.logs_eventos_por_processo:
+                self.logs_eventos_por_processo[processo_str] = []
+            
+            # Formatar timestamp
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            
+            # Montar mensagem do evento
+            if detalhes:
+                detalhes_str = ", ".join([f"{k}={v}" for k, v in detalhes.items()])
+                mensagem = f"[{timestamp}] {evento}: {detalhes_str}"
+            else:
+                mensagem = f"[{timestamp}] {evento}"
+            
+            # Adicionar à lista de eventos do processo
+            self.logs_eventos_por_processo[processo_str].append(mensagem)
+            
+        except Exception as e:
+            # Não quebrar o cálculo se o log falhar
+            if hasattr(self, "_logger"):
+                self._logger.warning(f"Falha ao adicionar log de evento: {e}")
 
     def _carregar_dados(self):
         """Carrega todos os arquivos de entrada."""
@@ -1980,20 +2024,33 @@ class CalculoComissao:
         try:
             df_anal = self.data.get("ANALISE_COMERCIAL_COMPLETA", pd.DataFrame())
             if df_anal.empty:
-                _info("[Métricas/Reconciliação] Análise Comercial vazia; nada a processar.")
+                _info(
+                    "[Métricas/Reconciliação] Análise Comercial vazia; nada a processar."
+                )
                 return
 
             # Determinar mês/ano de apuração
             try:
-                mes_param = int(self.params.get("mes_apuracao")) if self.params.get("mes_apuracao") else None
-                ano_param = int(self.params.get("ano_apuracao")) if self.params.get("ano_apuracao") else None
+                mes_param = (
+                    int(self.params.get("mes_apuracao"))
+                    if self.params.get("mes_apuracao")
+                    else None
+                )
+                ano_param = (
+                    int(self.params.get("ano_apuracao"))
+                    if self.params.get("ano_apuracao")
+                    else None
+                )
             except Exception:
                 mes_param, ano_param = None, None
 
             from utils.column_finder import ColumnFinder
+
             finder = ColumnFinder(df_anal)
             proc_col = finder.find_column(["processo", "id processo"])
-            dt_col = finder.find_column(["dt emissão", "dt emissao", "data emissão", "data emissao"])
+            dt_col = finder.find_column(
+                ["dt emissão", "dt emissao", "data emissão", "data emissao"]
+            )
             status_col = finder.find_column(["status processo", "status"])
 
             df_mes = df_anal.copy()
@@ -2007,22 +2064,31 @@ class CalculoComissao:
             # Filtrar somente Faturado quando coluna existir
             if status_col:
                 try:
-                    df_mes = df_mes[df_mes[status_col].astype(str).str.strip().str.upper() == "FATURADO"]
+                    df_mes = df_mes[
+                        df_mes[status_col].astype(str).str.strip().str.upper()
+                        == "FATURADO"
+                    ]
                 except Exception:
                     pass
 
             if df_mes.empty or not proc_col:
-                _info("[Métricas/Reconciliação] Nenhum processo faturado para o período.")
+                _info(
+                    "[Métricas/Reconciliação] Nenhum processo faturado para o período."
+                )
                 return
 
-            processos = sorted(df_mes[proc_col].dropna().astype(str).str.strip().unique().tolist())
+            processos = sorted(
+                df_mes[proc_col].dropna().astype(str).str.strip().unique().tolist()
+            )
             if not processos:
                 _info("[Métricas/Reconciliação] Nenhum processo elegível encontrado.")
                 return
 
             # Preparar calculadora de métricas
             metrics_calc = ProcessMetricsCalculator(
-                analise_comercial_df=self.data.get("ANALISE_COMERCIAL_COMPLETA", pd.DataFrame()),
+                analise_comercial_df=self.data.get(
+                    "ANALISE_COMERCIAL_COMPLETA", pd.DataFrame()
+                ),
                 regras_comissao_getter=self._get_regra_comissao,
                 fc_calculator_func=self._calcular_fc_para_item,  # usa FC corrente (não histórico)
                 colaboradores_df=self.data.get("COLABORADORES", pd.DataFrame()),
@@ -2034,31 +2100,218 @@ class CalculoComissao:
             for proc in processos:
                 try:
                     tcmp_dict, fcmp_dict = metrics_calc.calculate_for_process(proc)
+                    
+                    # NOVO (DEBUG): Capturar detalhes dos itens usados no cálculo
+                    itens_processo = metrics_calc._get_process_items(proc)
+                    itens_usados = []
+                    valor_total_itens = 0.0
+                    
+                    if not itens_processo.empty:
+                        from utils.column_finder import ColumnFinder
+                        finder_item = ColumnFinder(itens_processo)
+                        cod_prod_col = finder_item.find_column(['cod produto', 'cod_produto', 'produto'])
+                        valor_col = finder_item.find_column(['valor realizado', 'valor_realizado', 'faturamento'])
+                        
+                        for _, item in itens_processo.iterrows():
+                            cod_prod = str(item.get(cod_prod_col, '')) if cod_prod_col else ''
+                            valor_item = float(item.get(valor_col, 0.0) or 0.0) if valor_col else 0.0
+                            if valor_item > 0:
+                                itens_usados.append(cod_prod if cod_prod else f"Item_{len(itens_usados)+1}")
+                                valor_total_itens += valor_item
+                    
+                    # NOVO (DEBUG): Montar JSON com detalhes do cálculo de métricas
+                    detalhes_metricas = {
+                        "status": "Sucesso",
+                        "colaboradores": {},
+                        "itens_usados": itens_usados,
+                        "valor_total_itens": valor_total_itens,
+                        "mes_ano_faturamento": f"{ano_param or ''}-{(mes_param or 0):02d}" if (mes_param and ano_param) else None
+                    }
+                    
+                    # Adicionar TCMP/FCMP por colaborador
+                    for nome_colab, tcmp_val in tcmp_dict.items():
+                        fcmp_val = fcmp_dict.get(nome_colab, 0.0)
+                        detalhes_metricas["colaboradores"][nome_colab] = {
+                            "tcmp": float(tcmp_val) if tcmp_val else 0.0,
+                            "fcmp": float(fcmp_val) if fcmp_val else 0.0
+                        }
+                    
+                    # NOVO (DEBUG): Logar cálculo de métricas
+                    num_colabs = len(tcmp_dict)
+                    self._adicionar_log_evento(
+                        proc,
+                        f"Métricas TCMP/FCMP calculadas para {num_colabs} colaborador(es)",
+                        {
+                            "itens": len(itens_usados),
+                            "valor_total": f"R${valor_total_itens:.2f}",
+                            "mes_ano": detalhes_metricas["mes_ano_faturamento"]
+                        }
+                    )
 
                     # Persistir métricas em estado
-                    mes_ano = f"{ano_param or ''}-{(mes_param or 0):02d}" if (mes_param and ano_param) else None
-                    self.state_manager.update_process_metrics(
-                        proc, mes_ano, tcmp_dict, fcmp_dict, status_calculo_medias="REALIZADO"
+                    mes_ano = (
+                        f"{ano_param or ''}-{(mes_param or 0):02d}"
+                        if (mes_param and ano_param)
+                        else None
                     )
+                    self.state_manager.update_process_metrics(
+                        proc,
+                        mes_ano,
+                        tcmp_dict,
+                        fcmp_dict,
+                        status_calculo_medias="REALIZADO",
+                    )
+                    
+                    # NOVO (DEBUG): Salvar detalhes do cálculo no estado (será refatorado na Etapa 2.2)
+                    try:
+                        detalhes_metricas_json = json.dumps(detalhes_metricas, ensure_ascii=False, indent=2)
+                        proc_str = str(proc).strip()
+                        mask = self.state_manager.estado['PROCESSO'].astype(str).str.strip() == proc_str
+                        indices = self.state_manager.estado[mask].index
+                        
+                        if len(indices) > 0:
+                            idx = indices[0]
+                            # Garantir que a coluna existe
+                            if 'DETALHES_CALCULO_METRICAS' not in self.state_manager.estado.columns:
+                                self.state_manager.estado['DETALHES_CALCULO_METRICAS'] = None
+                            self.state_manager.estado.loc[idx, 'DETALHES_CALCULO_METRICAS'] = detalhes_metricas_json
+                        else:
+                            # Processo não existe no estado - criar (pode acontecer se processo foi faturado mas não teve pagamentos)
+                            from models.process_state import ESTADO_COLUMNS
+                            nova_linha = {}
+                            for col in ESTADO_COLUMNS:
+                                if col == 'PROCESSO':
+                                    nova_linha[col] = proc_str
+                                elif col == 'DETALHES_CALCULO_METRICAS':
+                                    nova_linha[col] = detalhes_metricas_json
+                                elif col == 'STATUS_CALCULO_MEDIAS':
+                                    nova_linha[col] = 'REALIZADO'
+                                elif col == 'MES_ANO_FATURAMENTO':
+                                    nova_linha[col] = mes_ano
+                                elif col in ['TOTAL_ANTECIPACOES', 'TOTAL_PAGAMENTOS_REGULARES', 'TOTAL_PAGO_ACUMULADO', 
+                                            'TOTAL_ADIANTADO_COMISSAO', 'VALOR_TOTAL_PROCESSO']:
+                                    nova_linha[col] = 0.0
+                                elif col == 'STATUS_RECONCILIACAO':
+                                    nova_linha[col] = 'Nao Realizada'
+                                elif col == 'ULTIMA_ATUALIZACAO':
+                                    nova_linha[col] = datetime.now().isoformat()
+                                else:
+                                    nova_linha[col] = None
+                            self.state_manager.estado = pd.concat(
+                                [self.state_manager.estado, pd.DataFrame([nova_linha])],
+                                ignore_index=True
+                            )
+                    except Exception as e:
+                        if hasattr(self, "_logger"):
+                            self._logger.warning(f"Falha ao salvar detalhes de métricas para processo {proc}: {e}")
+                        else:
+                            print(f"[AVISO] Falha ao salvar detalhes de métricas para processo {proc}: {e}")
 
                     # Caso exista adiantamento acumulado, calcular saldo de reconciliação
                     state = self.state_manager.get_process_state(proc) or {}
-                    total_adiantado = float(state.get("TOTAL_ADIANTADO_COMISSAO", 0.0) or 0.0)
+                    total_adiantado = float(
+                        state.get("TOTAL_ADIANTADO_COMISSAO", 0.0) or 0.0
+                    )
                     if total_adiantado > 0:
                         # Peso proporcional por TCMP
                         soma_tcmp = sum(v for v in tcmp_dict.values() if v is not None)
                         saldo_total = 0.0
+                        fcmp_medio_ponderado = 0.0
+                        detalhes_saldo = []
+                        
                         if soma_tcmp > 0:
                             for colab, fcmp in fcmp_dict.items():
                                 w = (tcmp_dict.get(colab, 0.0) or 0.0) / soma_tcmp
-                                saldo_total += total_adiantado * w * (float(fcmp or 0.0) - 1.0)
+                                fcmp_val = float(fcmp or 0.0)
+                                saldo_colab = total_adiantado * w * (fcmp_val - 1.0)
+                                saldo_total += saldo_colab
+                                fcmp_medio_ponderado += fcmp_val * w
+                                detalhes_saldo.append({
+                                    "colaborador": colab,
+                                    "peso_tcmp": w,
+                                    "fcmp": fcmp_val,
+                                    "saldo_parcial": saldo_colab
+                                })
                         else:
                             # Sem TCMP distribuível, aplicar FCMP médio simples
                             if fcmp_dict:
-                                media_fcmp = sum(fcmp_dict.values()) / max(len(fcmp_dict), 1)
+                                media_fcmp = sum(fcmp_dict.values()) / max(
+                                    len(fcmp_dict), 1
+                                )
                             else:
                                 media_fcmp = 1.0
+                            fcmp_medio_ponderado = media_fcmp
                             saldo_total = total_adiantado * (media_fcmp - 1.0)
+                            detalhes_saldo.append({
+                                "metodo": "FCMP_medio_simples",
+                                "fcmp_medio": media_fcmp
+                            })
+                        
+                        # NOVO (DEBUG): Montar JSON com detalhes do cálculo de reconciliação
+                        detalhes_reconciliacao = {
+                            "status": "Aplicado",
+                            "total_adiantado_comissao": total_adiantado,
+                            "fcmp_medio_ponderado": fcmp_medio_ponderado,
+                            "saldo_calculado": saldo_total,
+                            "formula": "Total_Adiantado × (FCMP - 1)",
+                            "detalhes_por_colaborador": detalhes_saldo
+                        }
+                        
+                        # NOVO (DEBUG): Logar cálculo de reconciliação
+                        self._adicionar_log_evento(
+                            proc,
+                            f"Saldo de reconciliação de R${saldo_total:.2f} calculado",
+                            {
+                                "total_adiantado": f"R${total_adiantado:.2f}",
+                                "fcmp_medio": f"{fcmp_medio_ponderado:.4f}",
+                                "colaboradores": len(detalhes_saldo)
+                            }
+                        )
+                        
+                        # NOVO (DEBUG): Salvar detalhes da reconciliação no estado
+                        try:
+                            detalhes_reconciliacao_json = json.dumps(detalhes_reconciliacao, ensure_ascii=False, indent=2)
+                            proc_str = str(proc).strip()
+                            mask = self.state_manager.estado['PROCESSO'].astype(str).str.strip() == proc_str
+                            indices = self.state_manager.estado[mask].index
+                            
+                            if len(indices) > 0:
+                                idx = indices[0]
+                                # Garantir que a coluna existe
+                                if 'DETALHES_CALCULO_RECONCILIACAO' not in self.state_manager.estado.columns:
+                                    self.state_manager.estado['DETALHES_CALCULO_RECONCILIACAO'] = None
+                                self.state_manager.estado.loc[idx[0], 'DETALHES_CALCULO_RECONCILIACAO'] = detalhes_reconciliacao_json
+                            else:
+                                # Processo não existe no estado - criar (não deveria acontecer, mas vamos garantir)
+                                from models.process_state import ESTADO_COLUMNS
+                                nova_linha = {}
+                                for col in ESTADO_COLUMNS:
+                                    if col == 'PROCESSO':
+                                        nova_linha[col] = proc_str
+                                    elif col == 'DETALHES_CALCULO_RECONCILIACAO':
+                                        nova_linha[col] = detalhes_reconciliacao_json
+                                    elif col == 'TOTAL_ADIANTADO_COMISSAO':
+                                        nova_linha[col] = total_adiantado
+                                    elif col in ['TOTAL_ANTECIPACOES', 'TOTAL_PAGAMENTOS_REGULARES', 'TOTAL_PAGO_ACUMULADO', 
+                                                'VALOR_TOTAL_PROCESSO']:
+                                        nova_linha[col] = 0.0
+                                    elif col == 'STATUS_RECONCILIACAO':
+                                        nova_linha[col] = 'Realizada'
+                                    elif col == 'STATUS_CALCULO_MEDIAS':
+                                        nova_linha[col] = 'REALIZADO'
+                                    elif col == 'ULTIMA_ATUALIZACAO':
+                                        nova_linha[col] = datetime.now().isoformat()
+                                    else:
+                                        nova_linha[col] = None
+                                self.state_manager.estado = pd.concat(
+                                    [self.state_manager.estado, pd.DataFrame([nova_linha])],
+                                    ignore_index=True
+                                )
+                        except Exception as e:
+                            if hasattr(self, "_logger"):
+                                self._logger.warning(f"Falha ao salvar detalhes de reconciliação para processo {proc}: {e}")
+                            else:
+                                print(f"[AVISO] Falha ao salvar detalhes de reconciliação para processo {proc}: {e}")
 
                         resumo_list.append(
                             {
@@ -2069,13 +2322,69 @@ class CalculoComissao:
                             }
                         )
                 except Exception as e_proc:
-                    self._log_validacao("AVISO", f"Falha ao calcular métricas para processo {proc}: {e_proc}", {})
+                    self._log_validacao(
+                        "AVISO",
+                        f"Falha ao calcular métricas para processo {proc}: {e_proc}",
+                        {},
+                    )
                     continue
+
+            # NOVO (DEBUG): Salvar logs de eventos acumulados no estado
+            for proc in processos:
+                try:
+                    proc_str = str(proc).strip()
+                    logs_eventos = self.logs_eventos_por_processo.get(proc_str, [])
+                    if logs_eventos:
+                        logs_eventos_str = "\n".join(logs_eventos)
+                        mask = self.state_manager.estado['PROCESSO'].astype(str).str.strip() == proc_str
+                        indices = self.state_manager.estado[mask].index
+                        
+                        if len(indices) > 0:
+                            idx = indices[0]
+                            # Garantir que a coluna existe
+                            if 'LOG_EVENTOS' not in self.state_manager.estado.columns:
+                                self.state_manager.estado['LOG_EVENTOS'] = None
+                            # Append aos logs existentes (se houver)
+                            logs_existentes = self.state_manager.estado.loc[idx, 'LOG_EVENTOS']
+                            if pd.notna(logs_existentes) and str(logs_existentes).strip():
+                                logs_eventos_str = f"{logs_existentes}\n{logs_eventos_str}"
+                            self.state_manager.estado.loc[idx, 'LOG_EVENTOS'] = logs_eventos_str
+                        else:
+                            # Processo não existe no estado - criar (pode acontecer se processo foi faturado mas não teve pagamentos)
+                            from models.process_state import ESTADO_COLUMNS
+                            nova_linha = {}
+                            for col in ESTADO_COLUMNS:
+                                if col == 'PROCESSO':
+                                    nova_linha[col] = proc_str
+                                elif col == 'LOG_EVENTOS':
+                                    nova_linha[col] = logs_eventos_str
+                                elif col == 'STATUS_CALCULO_MEDIAS':
+                                    nova_linha[col] = 'REALIZADO'
+                                elif col in ['TOTAL_ANTECIPACOES', 'TOTAL_PAGAMENTOS_REGULARES', 'TOTAL_PAGO_ACUMULADO', 
+                                            'TOTAL_ADIANTADO_COMISSAO', 'VALOR_TOTAL_PROCESSO']:
+                                    nova_linha[col] = 0.0
+                                elif col == 'STATUS_RECONCILIACAO':
+                                    nova_linha[col] = 'Nao Realizada'
+                                elif col == 'ULTIMA_ATUALIZACAO':
+                                    nova_linha[col] = datetime.now().isoformat()
+                                else:
+                                    nova_linha[col] = None
+                            self.state_manager.estado = pd.concat(
+                                [self.state_manager.estado, pd.DataFrame([nova_linha])],
+                                ignore_index=True
+                            )
+                except Exception as e:
+                    if hasattr(self, "_logger"):
+                        self._logger.warning(f"Falha ao salvar logs de eventos para processo {proc}: {e}")
+                    else:
+                        print(f"[AVISO] Falha ao salvar logs de eventos para processo {proc}: {e}")
 
             # Disponibilizar para a aba RECONCILIACAO (resumo)
             self.reconciliacao_resumo_list = resumo_list
         except Exception as e:
-            self._log_validacao("ERRO", f"Erro em métricas/reconciliação do mês: {e}", {})
+            self._log_validacao(
+                "ERRO", f"Erro em métricas/reconciliação do mês: {e}", {}
+            )
             self.reconciliacao_resumo_list = []
 
     def _calcular_comissoes_recebimento_nova_logica(self):
@@ -2088,6 +2397,10 @@ class CalculoComissao:
             loader = FinancialPaymentsLoader()
             path_fin = os.path.join(self.base_path, "Análise Financeira.xlsx")
             pagamentos = loader.load_from_file(path_fin)
+            
+            # NOVO (DEBUG): Salvar DataFrame normalizado para aba de debug
+            self.pagamentos_financeiro_normalizados = pagamentos.copy() if not pagamentos.empty else pd.DataFrame()
+            
             if pagamentos.empty:
                 self.comissoes_recebimento_df = pd.DataFrame()
                 return
@@ -2098,9 +2411,18 @@ class CalculoComissao:
 
             # Auxiliares
             from utils.column_finder import ColumnFinder
+
             anal_finder = ColumnFinder(df_anal) if not df_anal.empty else None
-            nf_col = anal_finder.find_column(["numero nf", "número nf", "num nf"]) if anal_finder else None
-            proc_col = anal_finder.find_column(["processo", "id processo"]) if anal_finder else None
+            nf_col = (
+                anal_finder.find_column(["numero nf", "número nf", "num nf"])
+                if anal_finder
+                else None
+            )
+            proc_col = (
+                anal_finder.find_column(["processo", "id processo"])
+                if anal_finder
+                else None
+            )
 
             def get_cargo(nome: str) -> Optional[str]:
                 if colaboradores_df is None or colaboradores_df.empty or not nome:
@@ -2122,17 +2444,46 @@ class CalculoComissao:
             )
 
             linhas = []
+            
+            # NOVO (DEBUG): Salvar fonte de pagamentos no estado
+            fonte_pagamentos = "Análise Financeira.xlsx"
 
             for _, row in pagamentos.iterrows():
                 tipo = row.get("TIPO_PAGAMENTO")
                 valor = float(row.get("VALOR_PAGO", 0.0) or 0.0)
                 if valor == 0:
                     continue
+                
+                # NOVO (DEBUG): Capturar detalhes do pagamento
+                documento_original = str(row.get("DOCUMENTO_ORIGINAL") or "")
+                documento_normalizado = str(row.get("DOCUMENTO_NORMALIZADO") or "")
+                data_pagamento = str(row.get("DATA_PAGAMENTO") or "")
+                id_cliente = str(row.get("ID_CLIENTE") or "")
 
                 if tipo == "Antecipação":
                     processo = str(row.get("PROCESSO") or "").strip()
                     if not processo:
                         continue
+                    
+                    # NOVO (DEBUG): Logar pagamento de antecipação
+                    self._adicionar_log_evento(
+                        processo,
+                        f"Pagamento 'Antecipação' (COT{processo}) de R${valor:.2f} processado",
+                        {"documento": documento_original, "data": data_pagamento}
+                    )
+                    
+                    # NOVO (DEBUG): Acumular detalhes do pagamento
+                    if processo not in self.pagamentos_processados_por_processo:
+                        self.pagamentos_processados_por_processo[processo] = []
+                    self.pagamentos_processados_por_processo[processo].append({
+                        "tipo": "Antecipação",
+                        "documento": documento_original,
+                        "documento_normalizado": documento_normalizado,
+                        "valor": valor,
+                        "data": data_pagamento,
+                        "id_cliente": id_cliente,
+                        "processo": processo
+                    })
                     # Calcular TCMP temporária (FC=1.0)
                     tcmp_dict, _ = metrics_calc_temp.calculate_for_process(processo)
                     total_comissao = 0.0
@@ -2158,7 +2509,9 @@ class CalculoComissao:
                     # Atualizar estado (valores pagos + comissões adiantadas)
                     self.state_manager.update_payment_advanced(processo, valor)
                     if total_comissao > 0:
-                        self.state_manager.update_commission_advanced(processo, total_comissao)
+                        self.state_manager.update_commission_advanced(
+                            processo, total_comissao
+                        )
 
                 else:
                     # Pagamento Regular - mapear por DOCUMENTO_NORMALIZADO -> NUMERO NF -> PROCESSO
@@ -2167,7 +2520,11 @@ class CalculoComissao:
                         doc6 = str(row.get("DOCUMENTO_NORMALIZADO") or "").strip()
                         if doc6:
                             try:
-                                nfs = df_anal[nf_col].astype(str).str.replace(r"\D", "", regex=True)
+                                nfs = (
+                                    df_anal[nf_col]
+                                    .astype(str)
+                                    .str.replace(r"\D", "", regex=True)
+                                )
                                 mask = nfs.str.contains(doc6, na=False)
                                 candidatos = df_anal[mask]
                                 if not candidatos.empty:
@@ -2176,6 +2533,26 @@ class CalculoComissao:
                                 processo = None
                     if not processo:
                         continue
+                    
+                    # NOVO (DEBUG): Logar pagamento regular
+                    self._adicionar_log_evento(
+                        processo,
+                        f"Pagamento 'Pagamento Regular' (NF{documento_normalizado}) de R${valor:.2f} processado",
+                        {"documento": documento_original, "data": data_pagamento}
+                    )
+                    
+                    # NOVO (DEBUG): Acumular detalhes do pagamento
+                    if processo not in self.pagamentos_processados_por_processo:
+                        self.pagamentos_processados_por_processo[processo] = []
+                    self.pagamentos_processados_por_processo[processo].append({
+                        "tipo": "Pagamento Regular",
+                        "documento": documento_original,
+                        "documento_normalizado": documento_normalizado,
+                        "valor": valor,
+                        "data": data_pagamento,
+                        "id_cliente": id_cliente,
+                        "processo": processo
+                    })
 
                     metrics = self.state_manager.get_process_metrics(processo) or {}
                     tcmp_dict = metrics.get("TCMP", {}) or {}
@@ -2191,7 +2568,11 @@ class CalculoComissao:
                             recebe_por_recebimento_ids=self.recebe_por_recebimento,
                         ).calculate_for_process(processo)
                         self.state_manager.update_process_metrics(
-                            processo, None, tcmp_dict, fcmp_dict, status_calculo_medias="REALIZADO"
+                            processo,
+                            None,
+                            tcmp_dict,
+                            fcmp_dict,
+                            status_calculo_medias="REALIZADO",
                         )
 
                     for nome, tcmp in tcmp_dict.items():
@@ -2216,11 +2597,96 @@ class CalculoComissao:
                     # Atualizar estado (valor pago regular)
                     self.state_manager.update_payment_regular(processo, valor)
 
-            self.comissoes_recebimento_df = pd.DataFrame(linhas) if linhas else pd.DataFrame()
+            # NOVO (DEBUG): Salvar logs e pagamentos processados no estado
+            # Isso será refatorado na Etapa 2.2 com método dedicado
+            processos_com_pagamentos = set(self.pagamentos_processados_por_processo.keys())
+            if processos_com_pagamentos:
+                _info(f"[DEBUG] Salvando logs de debug para {len(processos_com_pagamentos)} processo(s) com pagamentos: {sorted(processos_com_pagamentos)}")
+            for processo in processos_com_pagamentos:
+                try:
+                    processo_str = str(processo).strip()
+                    if not processo_str:
+                        continue
+                    
+                    # Converter lista de pagamentos para JSON
+                    pagamentos_json = json.dumps(
+                        self.pagamentos_processados_por_processo[processo],
+                        ensure_ascii=False,
+                        indent=2
+                    )
+                    
+                    # Converter logs de eventos para string (uma linha por evento)
+                    logs_eventos = self.logs_eventos_por_processo.get(processo_str, [])
+                    logs_eventos_str = "\n".join(logs_eventos) if logs_eventos else None
+                    
+                    # Garantir que o processo existe no estado (deve ter sido criado por update_payment_advanced/regular)
+                    # Mas vamos garantir que as colunas de debug estejam presentes
+                    mask = self.state_manager.estado['PROCESSO'].astype(str).str.strip() == processo_str
+                    indices = self.state_manager.estado[mask].index
+                    
+                    if len(indices) > 0:
+                        # Atualizar linha existente
+                        idx = indices[0]
+                        # Garantir que as colunas de debug existam
+                        for col_debug in ['FONTE_PAGAMENTOS', 'PAGAMENTOS_PROCESSADOS', 'LOG_EVENTOS']:
+                            if col_debug not in self.state_manager.estado.columns:
+                                self.state_manager.estado[col_debug] = None
+                        
+                        # Append aos logs existentes (se houver)
+                        logs_existentes = self.state_manager.estado.loc[idx, 'LOG_EVENTOS']
+                        if pd.notna(logs_existentes) and str(logs_existentes).strip():
+                            logs_eventos_str = f"{logs_existentes}\n{logs_eventos_str}" if logs_eventos_str else str(logs_existentes)
+                        
+                        self.state_manager.estado.loc[idx, 'FONTE_PAGAMENTOS'] = fonte_pagamentos
+                        self.state_manager.estado.loc[idx, 'PAGAMENTOS_PROCESSADOS'] = pagamentos_json
+                        self.state_manager.estado.loc[idx, 'LOG_EVENTOS'] = logs_eventos_str
+                        if LOG_VERBOSE:
+                            _info(f"[DEBUG] Estado atualizado para processo {processo_str}: FONTE={fonte_pagamentos}, PAGAMENTOS={len(self.pagamentos_processados_por_processo[processo])}, LOGS={len(logs_eventos)}")
+                    else:
+                        # Processo não existe no estado - criar (isso não deveria acontecer, mas vamos garantir)
+                        from models.process_state import ESTADO_COLUMNS
+                        nova_linha = {}
+                        for col in ESTADO_COLUMNS:
+                            if col == 'PROCESSO':
+                                nova_linha[col] = processo_str
+                            elif col == 'FONTE_PAGAMENTOS':
+                                nova_linha[col] = fonte_pagamentos
+                            elif col == 'PAGAMENTOS_PROCESSADOS':
+                                nova_linha[col] = pagamentos_json
+                            elif col == 'LOG_EVENTOS':
+                                nova_linha[col] = logs_eventos_str
+                            elif col in ['TOTAL_ANTECIPACOES', 'TOTAL_PAGAMENTOS_REGULARES', 'TOTAL_PAGO_ACUMULADO', 
+                                        'TOTAL_ADIANTADO_COMISSAO', 'VALOR_TOTAL_PROCESSO']:
+                                nova_linha[col] = 0.0
+                            elif col == 'STATUS_RECONCILIACAO':
+                                nova_linha[col] = 'Nao Realizada'
+                            elif col == 'STATUS_CALCULO_MEDIAS':
+                                nova_linha[col] = 'PENDENTE'
+                            elif col == 'ULTIMA_ATUALIZACAO':
+                                nova_linha[col] = datetime.now().isoformat()
+                            else:
+                                nova_linha[col] = None
+                        self.state_manager.estado = pd.concat(
+                            [self.state_manager.estado, pd.DataFrame([nova_linha])],
+                            ignore_index=True
+                        )
+                except Exception as e:
+                    # Não quebrar o cálculo se o log falhar
+                    if hasattr(self, "_logger"):
+                        self._logger.warning(f"Falha ao salvar logs de debug para processo {processo}: {e}")
+                    else:
+                        print(f"[AVISO] Falha ao salvar logs de debug para processo {processo}: {e}")
+
+            self.comissoes_recebimento_df = (
+                pd.DataFrame(linhas) if linhas else pd.DataFrame()
+            )
             # Manter snapshot do estado
             self.estado = self.state_manager.estado
         except Exception as e:
-            self._log_validacao("ERRO", f"Erro no cálculo de comissões por recebimento (nova lógica): {e}")
+            self._log_validacao(
+                "ERRO",
+                f"Erro no cálculo de comissões por recebimento (nova lógica): {e}",
+            )
             self.comissoes_recebimento_df = pd.DataFrame()
 
     def _get_regra_comissao(self, linha, grupo, subgrupo, tipo_mercadoria, cargo):
@@ -3185,6 +3651,24 @@ class CalculoComissao:
 
     def _gerar_saida(self):
         """Gera o arquivo Excel com todas as abas de resultado e o PDF de detalhamento."""
+        try:
+            self._gerar_saida_impl()
+        except Exception as e:
+            import traceback
+
+            erro_completo = traceback.format_exc()
+            _info(f"\n[ERRO CRÍTICO] Falha ao gerar arquivo de saída:\n{erro_completo}")
+            self._log_validacao("ERRO", f"Falha ao gerar saída: {e}", {})
+            raise
+
+    def _gerar_saida_impl(self):
+        """Implementação da geração do arquivo Excel (com try/except externo)."""
+        # Gerar nome do arquivo com timestamp atual
+        global NOME_ARQUIVO_SAIDA
+        NOME_ARQUIVO_SAIDA = "Comissoes_Calculadas_{}.xlsx".format(
+            datetime.now().strftime("%Y%m%d_%H%M%S")
+        )
+
         if not hasattr(self, "comissoes_df") or self.comissoes_df.empty:
             _info("Nenhuma comissão foi calculada. O arquivo de saída não será gerado.")
             self._log_validacao(
@@ -4131,11 +4615,73 @@ class CalculoComissao:
 
             # Aba: ESTADO (salva o snapshot atual do estado de recebimentos/reconciliações)
             try:
-                if getattr(self, "estado", None) is not None and not self.estado.empty:
-                    self.estado.to_excel(writer, sheet_name="ESTADO", index=False)
+                # Preferir o estado do state_manager quando disponível
+                df_estado = None
+                try:
+                    if (
+                        hasattr(self, "state_manager")
+                        and getattr(self.state_manager, "estado", None) is not None
+                    ):
+                        df_estado = self.state_manager.estado.copy()
+                except Exception:
+                    df_estado = None
+
+                if df_estado is None:
+                    df_estado = getattr(self, "estado", None)
+
+                if df_estado is None:
+                    # Criar DataFrame vazio com todas as colunas (incluindo debug) para evitar erro no frontend ao ler a aba
+                    from models.process_state import ESTADO_COLUMNS
+                    df_estado = pd.DataFrame(columns=ESTADO_COLUMNS)
+                else:
+                    # Normalizar o estado para garantir que todas as colunas estejam presentes
+                    df_estado = self.state_manager._normalize_estado(df_estado)
+                    if LOG_VERBOSE:
+                        _info(f"[DEBUG] Estado antes de salvar: {len(df_estado)} processos, colunas={list(df_estado.columns)}")
+                        processos_com_debug = df_estado[df_estado['LOG_EVENTOS'].notna() | df_estado['PAGAMENTOS_PROCESSADOS'].notna()]
+                        if not processos_com_debug.empty:
+                            _info(f"[DEBUG] Processos com dados de debug: {len(processos_com_debug)} - {sorted(processos_com_debug['PROCESSO'].astype(str).tolist())}")
+
+                df_estado.to_excel(writer, sheet_name="ESTADO", index=False)
             except Exception as e:
                 self._log_validacao(
                     "AVISO", f"Falha ao escrever ESTADO no arquivo de saída: {e}", {}
+                )
+
+            # NOVO (DEBUG): Aba DEBUG_PAGAMENTOS_FINANCEIRO com dados normalizados
+            try:
+                if (
+                    hasattr(self, "pagamentos_financeiro_normalizados")
+                    and self.pagamentos_financeiro_normalizados is not None
+                    and not self.pagamentos_financeiro_normalizados.empty
+                ):
+                    df_debug_pagamentos = self.pagamentos_financeiro_normalizados.copy()
+                    # Adicionar comentário explicativo na primeira linha (como linha de dados)
+                    # Nota: openpyxl não suporta comentários em células facilmente, então adicionamos uma linha de cabeçalho explicativo
+                    df_debug_pagamentos.to_excel(
+                        writer, sheet_name="DEBUG_PAGAMENTOS_FINANCEIRO", index=False
+                    )
+                else:
+                    # Criar DataFrame vazio com colunas esperadas
+                    df_debug_pagamentos = pd.DataFrame(
+                        columns=[
+                            "DOCUMENTO_ORIGINAL",
+                            "VALOR_PAGO",
+                            "DATA_PAGAMENTO",
+                            "ID_CLIENTE",
+                            "TIPO_PAGAMENTO",
+                            "PROCESSO",
+                            "DOCUMENTO_NORMALIZADO",
+                        ]
+                    )
+                    df_debug_pagamentos.to_excel(
+                        writer, sheet_name="DEBUG_PAGAMENTOS_FINANCEIRO", index=False
+                    )
+            except Exception as e:
+                self._log_validacao(
+                    "AVISO",
+                    f"Falha ao escrever DEBUG_PAGAMENTOS_FINANCEIRO: {e}",
+                    {},
                 )
 
         try:
@@ -4196,7 +4742,9 @@ class CalculoComissao:
             self._carregar_estado()
         # Nova ordem: primeiro métricas + reconciliação (mês do faturamento)
         _phase("5.1 Calculando TCMP/FCMP por processo e reconciliações do mês...")
-        with _timer_ctx("Métricas e reconciliação do mês", _safe_percent("reconciliacoes")):
+        with _timer_ctx(
+            "Métricas e reconciliação do mês", _safe_percent("reconciliacoes")
+        ):
             self._reconciliar_e_calcular_metricas_do_mes()
         # Em seguida, comissões de recebimento (usa TCMP/FCMP quando disponível)
         _phase("5.2 Calculando comissões por recebimento (nova lógica)...")

@@ -1126,6 +1126,10 @@ async def executar_calculo(payload: ExecCalculoRequest):
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+
+        erro_completo = traceback.format_exc()
+        print(f"[adapter] ERRO ao executar cálculo:\n{erro_completo}")
         raise HTTPException(
             status_code=500, detail=f"Erro ao executar cálculo: {str(e)}"
         )
@@ -1157,11 +1161,14 @@ async def listar_abas_resultado():
     """Lista abas do arquivo de resultado mais recente"""
     resultado_path = get_resultado_path()
     if not resultado_path:
+        print("[adapter] /resultado/abas -> nenhum arquivo de resultado encontrado")
         return {"abas": []}
 
     try:
         wb = load_workbook(resultado_path, read_only=True)
-        return {"abas": wb.sheetnames, "arquivo": resultado_path.name}
+        abas = wb.sheetnames
+        print(f"[adapter] /resultado/abas -> arquivo={resultado_path.name} abas={abas}")
+        return {"abas": abas, "arquivo": resultado_path.name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao ler resultado: {str(e)}")
 
@@ -1182,7 +1189,11 @@ async def ler_aba_resultado(
             status_code=404, detail="Nenhum arquivo de resultado encontrado"
         )
 
+    print(f"[adapter] /resultado/aba/{nome_aba} -> arquivo={resultado_path.name}")
     df = read_excel_sheet(resultado_path, nome_aba)
+    print(
+        f"[adapter] /resultado/aba/{nome_aba} -> linhas={len(df)} colunas={list(df.columns)}"
+    )
 
     # Aplicar filtros
     if filters:

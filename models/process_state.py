@@ -32,7 +32,13 @@ ESTADO_COLUMNS = [
     'MES_ANO_FATURAMENTO',         # YYYY-MM (string)
     'TCMP',                        # JSON string por colaborador
     'FCMP',                        # JSON string por colaborador
-    'ULTIMA_ATUALIZACAO'
+    'ULTIMA_ATUALIZACAO',
+    # Colunas de debug e depuração
+    'LOG_EVENTOS',                 # Log cronológico de eventos (TEXT)
+    'FONTE_PAGAMENTOS',           # Nome do arquivo fonte (TEXT)
+    'PAGAMENTOS_PROCESSADOS',     # Lista de pagamentos processados (JSON string)
+    'DETALHES_CALCULO_METRICAS',  # Detalhes do cálculo TCMP/FCMP (JSON string)
+    'DETALHES_CALCULO_RECONCILIACAO'  # Detalhes do cálculo de reconciliação (JSON string)
 ]
 
 
@@ -102,9 +108,14 @@ class ProcessStateManager:
         if 'MES_ANO_FATURAMENTO' in df.columns:
             df['MES_ANO_FATURAMENTO'] = df['MES_ANO_FATURAMENTO'].astype(str).replace({'nan': None})
         # Garantir strings para JSONs (ou None)
-        for json_col in ['TCMP', 'FCMP']:
+        for json_col in ['TCMP', 'FCMP', 'PAGAMENTOS_PROCESSADOS', 'DETALHES_CALCULO_METRICAS', 'DETALHES_CALCULO_RECONCILIACAO']:
             if json_col in df.columns:
                 df[json_col] = df[json_col].apply(lambda v: None if pd.isna(v) else str(v))
+        
+        # Garantir strings para colunas de texto (ou None)
+        for text_col in ['LOG_EVENTOS', 'FONTE_PAGAMENTOS']:
+            if text_col in df.columns:
+                df[text_col] = df[text_col].apply(lambda v: None if pd.isna(v) else str(v))
         
         return df
     
@@ -282,7 +293,7 @@ class ProcessStateManager:
         indices = self.estado[mask].index
         
         if len(indices) == 0:
-            # Criar nova entrada
+            # Criar nova entrada com todas as colunas (incluindo debug)
             nova_linha = {
                 'PROCESSO': proc_normalized,
                 'VALOR_TOTAL_PROCESSO': valor_total_processo if valor_total_processo is not None else 0.0,
@@ -297,8 +308,18 @@ class ProcessStateManager:
                 'MES_ANO_FATURAMENTO': None,
                 'TCMP': None,
                 'FCMP': None,
-                'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
+                'ULTIMA_ATUALIZACAO': datetime.now().isoformat(),
+                # Colunas de debug (inicializadas como None)
+                'LOG_EVENTOS': None,
+                'FONTE_PAGAMENTOS': None,
+                'PAGAMENTOS_PROCESSADOS': None,
+                'DETALHES_CALCULO_METRICAS': None,
+                'DETALHES_CALCULO_RECONCILIACAO': None
             }
+            # Garantir que todas as colunas de ESTADO_COLUMNS estejam presentes
+            for col in ESTADO_COLUMNS:
+                if col not in nova_linha:
+                    nova_linha[col] = None
             self.estado = pd.concat([self.estado, pd.DataFrame([nova_linha])], ignore_index=True, sort=False)
         else:
             # Atualizar entrada existente
@@ -350,7 +371,7 @@ class ProcessStateManager:
         indices = self.estado[mask].index
         
         if len(indices) == 0:
-            # Criar nova entrada
+            # Criar nova entrada com todas as colunas (incluindo debug)
             nova_linha = {
                 'PROCESSO': proc_normalized,
                 'VALOR_TOTAL_PROCESSO': valor_total_processo if valor_total_processo is not None else 0.0,
@@ -365,8 +386,18 @@ class ProcessStateManager:
                 'MES_ANO_FATURAMENTO': None,
                 'TCMP': None,
                 'FCMP': None,
-                'ULTIMA_ATUALIZACAO': datetime.now().isoformat()
+                'ULTIMA_ATUALIZACAO': datetime.now().isoformat(),
+                # Colunas de debug (inicializadas como None)
+                'LOG_EVENTOS': None,
+                'FONTE_PAGAMENTOS': None,
+                'PAGAMENTOS_PROCESSADOS': None,
+                'DETALHES_CALCULO_METRICAS': None,
+                'DETALHES_CALCULO_RECONCILIACAO': None
             }
+            # Garantir que todas as colunas de ESTADO_COLUMNS estejam presentes
+            for col in ESTADO_COLUMNS:
+                if col not in nova_linha:
+                    nova_linha[col] = None
             self.estado = pd.concat([self.estado, pd.DataFrame([nova_linha])], ignore_index=True, sort=False)
         else:
             # Atualizar entrada existente

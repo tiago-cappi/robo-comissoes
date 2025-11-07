@@ -18,17 +18,18 @@ const ReconProcessoModal = ({ rowData }) => {
       <Divider />
 
       <Title level={5}>Cálculo do Saldo Final</Title>
+      <p style={{ marginTop: 8 }}>
+        <b>Fórmula (nova):</b> O saldo é calculado <i>apenas</i> sobre o que foi adiantado.
+        Em termos simplificados: <code>Saldo = Total_Adiantado × (FCMP − 1)</code>,
+        ponderado pela participação de cada colaborador via TCMP.
+      </p>
       <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0' }}>
-        <span>A. Comissão Correta Total (c/ FC Histórico):</span>
-        <strong style={{ fontSize: '1.1em' }}>{formatCurrencyBR(rowData?.COMISSAO_CORRETA_TOTAL)}</strong>
+        <span>Total de Adiantamentos Pagos (sem FC):</span>
+        <strong style={{ fontSize: '1.1em' }}>{formatCurrencyBR(rowData?.TOTAL_ADIANTAMENTOS_PAGOS)}</strong>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #ccc' }}>
-        <span>B. Total de Adiantamentos já Pagos (sem FC):</span>
-        <strong style={{ fontSize: '1.1em', color: '#ff4d4f' }}>- {formatCurrencyBR(rowData?.TOTAL_ADIANTAMENTOS_PAGOS)}</strong>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '20px 0' }}>
-        <span style={{ fontSize: '1.2em' }}><b>Saldo Final (A - B):</b></span>
-        <h3 style={{ margin: 0 }}>{formatCurrencyBR(rowData?.SALDO_FINAL_RECONCILIACAO)}</h3>
+        <span>Saldo Final (ajuste no mês do faturamento):</span>
+        <strong style={{ fontSize: '1.1em' }}>{formatCurrencyBR(rowData?.SALDO_FINAL_RECONCILIACAO)}</strong>
       </div>
       <Divider />
 

@@ -25,6 +25,7 @@ import ResumoColaboradorModal from '../components/ResumoColaboradorModal';
 import RecebimentoModal from '../components/RecebimentoModal';
 import ReconProcessoModal from '../components/ReconProcessoModal';
 import EstadoModal from '../components/EstadoModal';
+import MetricasProcessoModal from '../components/MetricasProcessoModal';
 
 const { TabPane } = Tabs;
 const { Search } = Input;
@@ -251,6 +252,91 @@ const groupReconciliacaoData = (data = []) => {
   });
 };
 
+// Agrupamento hierárquico para COMISSOES_RECEBIMENTO (Processo -> Item -> Colaboradores)
+const groupRecebimentoHierarquicoData = (raw = []) => {
+  const processos = new Map();
+  const tipoDe = (row) => row.TIPO_PAGAMENTO || row.tipo_lancamento || '';
+  raw.forEach((row, idx) => {
+    const processo = row.processo || `PROC_${idx}`;
+    if (!processos.has(processo)) {
+      processos.set(processo, { key: processo, processo, items: [] });
+    }
+    const proc = processos.get(processo);
+    const tp = String(tipoDe(row) || '');
+    const descr = tp === 'Antecipação'
+      ? `Adiantamento ${row.DATA_RECEBIMENTO || ''}`
+      : `Pagamento ${row.DATA_PAGAMENTO || row.DATA_RECEBIMENTO || row.documento_nf || ''}`;
+    const item = {
+      key: `${processo}-${proc.items.length + 1}-${tp}`,
+      processo,
+      item_tipo: tp,
+      item_descr: descr,
+      valor_item: Number(row.valor_recebido_total || row.faturamento_item || row.VALOR_PAGO || 0),
+      comissao_item: 0,
+      colaboradores: [],
+    };
+    const child = {
+      key: `${item.key}-${row.id_colaborador || row.nome_colaborador || idx}`,
+      nome_colaborador: row.nome_colaborador,
+      cargo: row.cargo,
+      tcmp_aplicado: row.tcmp_aplicado,
+      fcmp_aplicado: row.fator_correcao_fc,
+      taxa_rateio_aplicada: row.taxa_rateio_aplicada,
+      percentual_elegibilidade_pe: row.percentual_elegibilidade_pe,
+      comissao_calculada: Number(row.comissao_calculada || row.comissao_total || 0),
+      valor_recebido_total: row.valor_recebido_total,
+      originalData: row,
+    };
+    item.colaboradores.push(child);
+    item.comissao_item += child.comissao_calculada;
+    proc.items.push(item);
+  });
+  return Array.from(processos.values());
+};
+
+// Nova: Agrupador para MÉTRICAS_PROCESSOS (Processo -> colaboradores com TCMP/FCMP)
+const parseJSONSafe = (val) => {
+  if (!val) return {};
+  try { return typeof val === 'string' ? JSON.parse(val) : val; } catch (_) { return {}; }
+};
+
+const groupMetricasProcessosData = (data = [], isDebug = false) => {
+  try {
+    const map = new Map();
+    data.forEach((row, idx) => {
+      const processo = row.PROCESSO || row.processo || `PROC_${idx}`;
+      if (!map.has(processo)) {
+        map.set(processo, {
+          key: processo,
+          processo,
+          MES_ANO_FATURAMENTO: row.MES_ANO_FATURAMENTO || row.mes_ano_faturamento,
+          STATUS_CALCULO_MEDIAS: row.STATUS_CALCULO_MEDIAS || row.status_calculo_medias,
+          __colaboradores_metricas: [],
+        });
+      }
+      const entry = map.get(processo);
+      const tcmp = parseJSONSafe(row.TCMP || row.tcmp);
+      const fcmp = parseJSONSafe(row.FCMP || row.fcmp);
+      const nomes = new Set([...Object.keys(tcmp || {}), ...Object.keys(fcmp || {})]);
+      nomes.forEach((nome) => {
+        entry.__colaboradores_metricas.push({
+          key: `${processo}-${nome}`,
+          nome_colaborador: nome,
+          tcmp: Number(tcmp?.[nome] || 0),
+          fcmp: Number(fcmp?.[nome] || 0),
+          fonte: 'ESTADO',
+        });
+      });
+    });
+    const out = Array.from(map.values());
+    if (isDebug) console.debug('[Resultados] Métricas agrupadas', { total: out.length, sample: out.slice(0, 2) });
+    return out;
+  } catch (e) {
+    if (isDebug) console.debug('[Resultados][ERRO] Agrupar métricas', e);
+    return [];
+  }
+};
+
 const ResultadosPage = () => {
   const [abas, setAbas] = useState([]);
   const [abaAtiva, setAbaAtiva] = useState('');
@@ -281,6 +367,15 @@ const ResultadosPage = () => {
     try {
       const response = await resultadosAPI.listarAbas();
       const abasList = (response.data.abas || []).filter(aba => !ABAS_OCULTAS.includes(aba));
+      if (isDebug) console.debug('[Resultados] Abas carregadas', abasList);
+      // Garantir presença da aba MÉTRICAS_PROCESSOS (mapeia dados da aba ESTADO)
+      try {
+        const temMetricas = abasList.some((a) => String(a).toUpperCase() === 'MÉTRICAS_PROCESSOS');
+        if (!temMetricas) {
+          abasList.push('MÉTRICAS_PROCESSOS');
+          if (isDebug) console.debug('[Resultados] Aba MÉTRICAS_PROCESSOS adicionada (forçada)');
+        }
+      } catch (_) { /* noop */ }
       setAbas(abasList);
       if (abasList.length > 0 && !abaAtiva) {
         setAbaAtiva(abasList[0]);
@@ -288,7 +383,7 @@ const ResultadosPage = () => {
     } catch (error) {
       message.error(`Erro ao carregar abas: ${error.message}`);
     }
-  }, [abaAtiva]);
+  }, [abaAtiva, isDebug]);
 
   const carregarDados = useCallback(async () => {
     if (!abaAtiva) return;
@@ -312,9 +407,13 @@ const ResultadosPage = () => {
         filters: Object.keys(filtersParam).length > 0 ? filtersParam : undefined,
       };
 
-      const response = await resultadosAPI.lerAba(abaAtiva, params);
+      // Mapear aba de métricas para leitura da aba ESTADO
+      const nomeAbaReal = (abaAtiva || '').toString().trim().toUpperCase() === 'MÉTRICAS_PROCESSOS' ? 'ESTADO' : abaAtiva;
+      if (isDebug && nomeAbaReal !== abaAtiva) console.debug('[Resultados] Mapeando leitura', { solicitada: abaAtiva, real: nomeAbaReal });
+      const response = await resultadosAPI.lerAba(nomeAbaReal, params);
       const { data, total, columns } = response.data;
 
+      if (isDebug) console.debug('[Resultados] Dados lidos', { aba: abaAtiva, total: (data || []).length, sample: (data || []).slice(0, 2) });
       setDados(data);
       setColunas(columns || []);
       setPagination((prev) => ({ ...prev, total }));
@@ -324,7 +423,7 @@ const ResultadosPage = () => {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [abaAtiva, pagination.current, pagination.pageSize, sortConfig.sortBy, sortConfig.sortOrder, filtrosAtivos]);
+  }, [abaAtiva, pagination.current, pagination.pageSize, sortConfig.sortBy, sortConfig.sortOrder, filtrosAtivos, isDebug]);
 
   useEffect(() => {
     carregarAbas();
@@ -430,13 +529,24 @@ const ResultadosPage = () => {
   const isComissoesCalculadas = abaAtivaKey === 'COMISSOES_CALCULADAS';
   const isComissoesRecebimento = abaAtivaKey === 'COMISSOES_RECEBIMENTO';
   const isReconciliacao = abaAtivaKey === 'RECONCILIACAO';
+  const isAbaMetricas = abaAtivaKey === 'MÉTRICAS_PROCESSOS';
 
   const dadosProcessados = useMemo(() => {
     if (isComissoesCalculadas) return groupFaturamentoData(dados);
-    if (isComissoesRecebimento) return groupRecebimentoData(dados);
+    if (isComissoesRecebimento) return groupRecebimentoHierarquicoData(dados);
     if (isReconciliacao) return groupReconciliacaoData(dados);
+    if (isAbaMetricas) return groupMetricasProcessosData(dados, isDebug);
     return dados;
-  }, [dados, isComissoesCalculadas, isComissoesRecebimento, isReconciliacao]);
+  }, [dados, isComissoesCalculadas, isComissoesRecebimento, isReconciliacao, isAbaMetricas, isDebug]);
+
+  useEffect(() => {
+    try {
+      if (isDebug && isComissoesCalculadas) {
+        // eslint-disable-next-line no-console
+        console.debug('[Resultados] Faturamento agrupado', { total: Array.isArray(dadosProcessados) ? dadosProcessados.length : 0 });
+      }
+    } catch (_) { }
+  }, [isDebug, isComissoesCalculadas, dadosProcessados]);
 
   const colunasMestreComissoesCalculadas = useMemo(
     () => [
@@ -600,6 +710,8 @@ const ResultadosPage = () => {
         key: 'cargo',
         width: 200,
       },
+      { title: 'TCMP', dataIndex: 'tcmp_aplicado', key: 'tcmp_aplicado', width: 120, render: (v) => (v !== undefined ? formatPercent(v) : '-') },
+      { title: 'FCMP', dataIndex: 'fcmp_aplicado', key: 'fcmp_aplicado', width: 120, render: (v) => (v !== undefined ? formatPercent(v) : '-') },
       {
         title: '% Aplicada',
         key: 'percentual_aplicado',
@@ -607,7 +719,8 @@ const ResultadosPage = () => {
         render: (_, record) => {
           const taxaRateio = Number(record.taxa_rateio_aplicada || 0);
           const percentualElegibilidade = Number(record.percentual_elegibilidade_pe || 0);
-          return formatPercent(taxaRateio * percentualElegibilidade);
+          const val = taxaRateio * percentualElegibilidade;
+          return val ? formatPercent(val) : '-';
         },
       },
       {
@@ -635,6 +748,24 @@ const ResultadosPage = () => {
       },
     ],
     [handleDetalhesClick]
+  );
+
+  // Colunas para itens (Adiantamento/Parcela) em COMISSOES_RECEBIMENTO
+  const colunasItensComissoesRecebimento = useMemo(
+    () => [
+      {
+        title: 'Tipo',
+        dataIndex: 'item_tipo',
+        key: 'item_tipo',
+        width: 140,
+        render: (v) => <Tag color={v === 'Antecipação' ? 'orange' : 'green'}>{v || '-'}</Tag>,
+      },
+      { title: 'Descrição', dataIndex: 'item_descr', key: 'item_descr', width: 320 },
+      { title: 'Valor', dataIndex: 'valor_item', key: 'valor_item', width: 160, align: 'right', render: (v) => formatCurrencyBR(v) },
+      { title: 'Comissão', dataIndex: 'comissao_item', key: 'comissao_item', width: 160, align: 'right', render: (v) => formatCurrencyBR(v) },
+      { title: 'Colaboradores', key: 'total_colaboradores', width: 160, render: (_, r) => <Tag color="blue">{Array.isArray(r.colaboradores) ? r.colaboradores.length : 0}</Tag> },
+    ],
+    []
   );
 
   const colunasMestreReconciliacao = useMemo(
@@ -706,6 +837,44 @@ const ResultadosPage = () => {
       },
     ],
     [handleDetalhesClick]
+  );
+
+  // Colunas para MÉTRICAS_PROCESSOS
+  const colunasMestreMetricas = useMemo(
+    () => [
+      { title: 'Processo', dataIndex: 'processo', key: 'processo', width: 140, fixed: 'left' },
+      { title: 'Mês/Ano Faturamento', dataIndex: 'MES_ANO_FATURAMENTO', key: 'MES_ANO_FATURAMENTO', width: 180 },
+      { title: 'Status Métricas', dataIndex: 'STATUS_CALCULO_MEDIAS', key: 'STATUS_CALCULO_MEDIAS', width: 180, render: (v) => <Tag color={String(v).toUpperCase() === 'REALIZADO' ? 'green' : 'default'}>{v || '-'}</Tag> },
+      { title: 'Colab. c/ Métricas', key: 'qtd_colab', width: 180, render: (_, r) => <Tag color="blue">{Array.isArray(r.__colaboradores_metricas) ? r.__colaboradores_metricas.length : 0}</Tag> },
+      {
+        title: 'Ações', key: 'acoes', width: 140, fixed: 'right', render: (_, record) => (
+          <Button type="link" icon={<EyeOutlined />} onClick={() => handleDetalhesClick(record)} size="small">Ver Detalhes</Button>
+        )
+      },
+    ],
+    [handleDetalhesClick]
+  );
+
+  const expandableMetricas = useMemo(
+    () => ({
+      expandedRowRender: (procRecord) => (
+        <Table
+          columns={[
+            { title: 'Colaborador', dataIndex: 'nome_colaborador', key: 'nome_colaborador', width: 260 },
+            { title: 'TCMP', dataIndex: 'tcmp', key: 'tcmp', width: 120, render: (v) => formatPercent(v) },
+            { title: 'FCMP', dataIndex: 'fcmp', key: 'fcmp', width: 120, render: (v) => formatPercent(v) },
+            { title: 'Fonte', dataIndex: 'fonte', key: 'fonte', width: 160 },
+          ]}
+          dataSource={Array.isArray(procRecord.__colaboradores_metricas) ? procRecord.__colaboradores_metricas : []}
+          rowKey="key"
+          pagination={false}
+          size="small"
+          scroll={{ x: 'max-content' }}
+        />
+      ),
+      rowExpandable: (procRecord) => Array.isArray(procRecord.__colaboradores_metricas) && procRecord.__colaboradores_metricas.length > 0,
+    }),
+    []
   );
 
   const colunasDetalheReconciliacao = useMemo(
@@ -868,19 +1037,32 @@ const ResultadosPage = () => {
 
   const expandableComissoesRecebimento = useMemo(
     () => ({
-      expandedRowRender: (record) => (
+      expandedRowRender: (processoRecord) => (
         <Table
-          columns={colunasDetalheComissoesRecebimento}
-          dataSource={record.children}
+          columns={colunasItensComissoesRecebimento}
+          dataSource={processoRecord.items}
           rowKey="key"
           pagination={false}
           size="small"
           scroll={{ x: 'max-content' }}
+          expandable={{
+            expandedRowRender: (itemRecord) => (
+              <Table
+                columns={colunasDetalheComissoesRecebimento}
+                dataSource={itemRecord.colaboradores}
+                rowKey="key"
+                pagination={false}
+                size="small"
+                scroll={{ x: 'max-content' }}
+              />
+            ),
+            rowExpandable: (itemRecord) => Array.isArray(itemRecord.colaboradores) && itemRecord.colaboradores.length > 0,
+          }}
         />
       ),
-      rowExpandable: (record) => Array.isArray(record.children) && record.children.length > 0,
+      rowExpandable: (processoRecord) => Array.isArray(processoRecord.items) && processoRecord.items.length > 0,
     }),
-    [colunasDetalheComissoesRecebimento]
+    [colunasItensComissoesRecebimento, colunasDetalheComissoesRecebimento]
   );
 
   const colunasItensReconciliacao = useMemo(
@@ -977,6 +1159,8 @@ const ResultadosPage = () => {
         return <DetalhesCalculoModal rowData={modalData} isHistorico={true} />;
       case 'ESTADO':
         return <EstadoModal rowData={modalData} />;
+      case 'MÉTRICAS_PROCESSOS':
+        return <MetricasProcessoModal rowData={modalData} />;
       default:
         return null;
     }
@@ -1214,6 +1398,7 @@ const ResultadosPage = () => {
                 const isAbaCalculadas = abaKey === 'COMISSOES_CALCULADAS';
                 const isAbaRecebimento = abaKey === 'COMISSOES_RECEBIMENTO';
                 const isAbaReconciliacao = abaKey === 'RECONCILIACAO';
+                const isAbaMetricasLocal = abaKey === 'MÉTRICAS_PROCESSOS';
 
                 const colunasTabelaAtual = isAbaCalculadas
                   ? colunasMestreComissoesCalculadas
@@ -1221,7 +1406,9 @@ const ResultadosPage = () => {
                     ? colunasMestreComissoesRecebimento
                     : isAbaReconciliacao
                       ? colunasMestreReconciliacao
-                      : colunasTabelaGenerica;
+                      : isAbaMetricasLocal
+                        ? colunasMestreMetricas
+                        : colunasTabelaGenerica;
 
                 const expandableAtual = isAbaCalculadas
                   ? expandableComissoesCalculadas
@@ -1229,7 +1416,9 @@ const ResultadosPage = () => {
                     ? expandableComissoesRecebimento
                     : isAbaReconciliacao
                       ? expandableReconciliacao
-                      : undefined;
+                      : isAbaMetricasLocal
+                        ? expandableMetricas
+                        : undefined;
 
                 const dadosParaTabela = abaKey === abaAtivaKey
                   ? isAbaCalculadas || isAbaRecebimento || isAbaReconciliacao

@@ -44,20 +44,27 @@ class FinancialPaymentsLoader:
             DataFrame com colunas padronizadas (ver docstring do módulo)
         """
         if not filepath or not os.path.exists(filepath):
+            print(f"[PaymentsLoader] Arquivo não encontrado: {filepath}")
             return pd.DataFrame()
 
         try:
             df = pd.read_excel(filepath, engine='openpyxl')
+            print(f"[PaymentsLoader] Leitura OK: {filepath} linhas={len(df)} cols={list(df.columns)}")
         except Exception:
             try:
                 df = pd.read_excel(filepath)  # fallback
+                print(f"[PaymentsLoader] Leitura fallback OK: {filepath} linhas={len(df)} cols={list(df.columns)}")
             except Exception:
+                print(f"[PaymentsLoader] Falha ao ler arquivo: {filepath}")
                 return pd.DataFrame()
 
         if df.empty:
+            print("[PaymentsLoader] Arquivo lido, porém vazio")
             return pd.DataFrame()
 
-        return self._normalize_dataframe(df)
+        out = self._normalize_dataframe(df)
+        print(f"[PaymentsLoader] Normalizado: linhas={len(out)} cols={list(out.columns)}")
+        return out
 
     def _normalize_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """Normaliza colunas essenciais e aplica regras de negócio."""
