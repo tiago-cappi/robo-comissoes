@@ -117,3 +117,88 @@
 2025-11-07 17:24:40,713 | INFO | [PRESCAN] Rodando detecção de cross-selling...
 2025-11-07 17:24:40,736 | INFO | [PRESCAN] Detecção concluída: 1 caso(s) encontrado(s)
 2025-11-07 17:24:40,736 | INFO | [PRESCAN] Retornando 1 caso(s)
+2025-11-10 11:44:22,270 | INFO | [PRESCAN] Iniciando pré-scan para 9/2025
+2025-11-10 11:44:24,264 | INFO | [PRESCAN] Arquivo XLSX detectado sem CSV correspondente, executando preparador para conversão
+2025-11-10 11:44:24,264 | INFO | [PRESCAN] Executando preparador de dados...
+2025-11-10 11:44:24,827 | INFO | [PRESCAN] Preparador concluído
+2025-11-10 11:44:24,827 | INFO | [PRESCAN] Configurando caminhos de arquivos...
+2025-11-10 11:44:24,827 | INFO | [PRESCAN] Arquivo de rentabilidade: rentabilidades\rentabilidade_09_2025_agrupada.xlsx
+2025-11-10 11:44:24,827 | INFO | [PRESCAN] Instanciando CalculoComissao...
+2025-11-10 11:44:24,829 | INFO | [PRESCAN] Carregando dados...
+2025-11-10 11:44:25,727 | INFO | [PRESCAN] Pré-processando dados...
+2025-11-10 11:44:25,734 | INFO | [PRESCAN] Rodando detecção de cross-selling...
+2025-11-10 11:44:25,741 | INFO | [PRESCAN] Detecção concluída: 1 caso(s) encontrado(s)
+2025-11-10 11:44:25,741 | INFO | [PRESCAN] Retornando 1 caso(s)
+2025-11-10 12:13:43,900 | INFO | [PRESCAN] Iniciando pré-scan para 9/2025
+2025-11-10 12:13:43,917 | INFO | [PRESCAN] Arquivo XLSX detectado sem CSV correspondente, executando preparador para conversão
+2025-11-10 12:13:43,917 | INFO | [PRESCAN] Executando preparador de dados...
+2025-11-10 12:13:44,308 | INFO | [PRESCAN] Preparador concluído
+2025-11-10 12:13:44,308 | INFO | [PRESCAN] Configurando caminhos de arquivos...
+2025-11-10 12:13:44,309 | INFO | [PRESCAN] Arquivo de rentabilidade: rentabilidades\rentabilidade_09_2025_agrupada.xlsx
+2025-11-10 12:13:44,309 | INFO | [PRESCAN] Instanciando CalculoComissao...
+2025-11-10 12:13:44,311 | INFO | [PRESCAN] Carregando dados...
+2025-11-10 12:13:45,841 | INFO | [PRESCAN] Pré-processando dados...
+2025-11-10 12:13:45,847 | INFO | [PRESCAN] Rodando detecção de cross-selling...
+2025-11-10 12:13:45,857 | INFO | [PRESCAN] Detecção concluída: 1 caso(s) encontrado(s)
+2025-11-10 12:13:45,857 | INFO | [PRESCAN] Retornando 1 caso(s)
+2025-11-10 12:17:20,509 | INFO | [PRESCAN] Iniciando pré-scan para 9/2025
+2025-11-10 12:17:20,602 | ERROR | [PRESCAN] Erro fatal: unexpected character after line continuation character (calculo_comissoes.py, line 2594)
+Traceback (most recent call last):
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\frontend\adapter\app.py", line 950, in executar_prescan
+    from calculo_comissoes import CalculoComissao
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\calculo_comissoes.py", line 2594
+    _info(f\"[Recebimentos] (DEBUG) Processo {processo_str} fora do ESTADO; debug de pagamentos não salvo.\")
+            ^
+SyntaxError: unexpected character after line continuation character
+
+2025-11-10 12:17:29,286 | INFO | [PRESCAN] Iniciando pré-scan para 9/2025
+2025-11-10 12:17:29,376 | ERROR | [PRESCAN] Erro fatal: unexpected character after line continuation character (calculo_comissoes.py, line 2594)
+Traceback (most recent call last):
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\frontend\adapter\app.py", line 950, in executar_prescan
+    from calculo_comissoes import CalculoComissao
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\calculo_comissoes.py", line 2594
+    _info(f\"[Recebimentos] (DEBUG) Processo {processo_str} fora do ESTADO; debug de pagamentos não salvo.\")
+            ^
+SyntaxError: unexpected character after line continuation character
+
+2025-11-10 12:17:35,088 | INFO | [PRESCAN] Iniciando pré-scan para 11/2025
+2025-11-10 12:17:35,174 | ERROR | [PRESCAN] Erro fatal: unexpected character after line continuation character (calculo_comissoes.py, line 2594)
+Traceback (most recent call last):
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\frontend\adapter\app.py", line 950, in executar_prescan
+    from calculo_comissoes import CalculoComissao
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\calculo_comissoes.py", line 2594
+    _info(f\"[Recebimentos] (DEBUG) Processo {processo_str} fora do ESTADO; debug de pagamentos não salvo.\")
+            ^
+SyntaxError: unexpected character after line continuation character
+
+2025-11-10 12:17:37,139 | INFO | [PRESCAN] Iniciando pré-scan para 9/2025
+2025-11-10 12:17:37,220 | ERROR | [PRESCAN] Erro fatal: unexpected character after line continuation character (calculo_comissoes.py, line 2594)
+Traceback (most recent call last):
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\frontend\adapter\app.py", line 950, in executar_prescan
+    from calculo_comissoes import CalculoComissao
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\calculo_comissoes.py", line 2594
+    _info(f\"[Recebimentos] (DEBUG) Processo {processo_str} fora do ESTADO; debug de pagamentos não salvo.\")
+            ^
+SyntaxError: unexpected character after line continuation character
+
+2025-11-10 12:18:24,958 | INFO | [PRESCAN] Iniciando pré-scan para 9/2025
+2025-11-10 12:18:25,045 | ERROR | [PRESCAN] Erro fatal: unexpected character after line continuation character (calculo_comissoes.py, line 2594)
+Traceback (most recent call last):
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\frontend\adapter\app.py", line 950, in executar_prescan
+    from calculo_comissoes import CalculoComissao
+  File "C:\Users\m.rafael\Desktop\projetos\robo-comissoes\calculo_comissoes.py", line 2594
+    _info(f\"[Recebimentos] (DEBUG) Processo {processo_str} fora do ESTADO; debug de pagamentos não salvo.\")
+            ^
+SyntaxError: unexpected character after line continuation character
+
+2025-11-10 12:19:46,499 | INFO | [PRESCAN] Iniciando pré-scan para 9/2025
+2025-11-10 12:19:47,397 | INFO | [PRESCAN] Executando preparador de dados...
+2025-11-10 12:19:47,721 | INFO | [PRESCAN] Preparador concluído
+2025-11-10 12:19:47,721 | INFO | [PRESCAN] Configurando caminhos de arquivos...
+2025-11-10 12:19:47,722 | INFO | [PRESCAN] Arquivo de rentabilidade: rentabilidades\rentabilidade_09_2025_agrupada.xlsx
+2025-11-10 12:19:47,723 | INFO | [PRESCAN] Instanciando CalculoComissao...
+2025-11-10 12:19:47,725 | INFO | [PRESCAN] Carregando dados...
+2025-11-10 12:19:49,228 | INFO | [PRESCAN] Pré-processando dados...
+2025-11-10 12:19:49,237 | INFO | [PRESCAN] Rodando detecção de cross-selling...
+2025-11-10 12:19:49,250 | INFO | [PRESCAN] Detecção concluída: 1 caso(s) encontrado(s)
+2025-11-10 12:19:49,250 | INFO | [PRESCAN] Retornando 1 caso(s)

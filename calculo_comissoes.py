@@ -2022,6 +2022,7 @@ class CalculoComissao:
         onde w_colab é a proporção do TCMP do colaborador no processo.
         """
         try:
+            _info("[Métricas/Reconciliação] Início do cálculo de métricas e reconciliações do mês")
             df_anal = self.data.get("ANALISE_COMERCIAL_COMPLETA", pd.DataFrame())
             if df_anal.empty:
                 _info(
@@ -2080,6 +2081,20 @@ class CalculoComissao:
             processos = sorted(
                 df_mes[proc_col].dropna().astype(str).str.strip().unique().tolist()
             )
+            # Filtrar para somente processos já existentes no ESTADO (provenientes de Análise Financeira)
+            try:
+                procs_estado = set(
+                    self.state_manager.estado.get("PROCESSO", pd.Series([], dtype=str))
+                    .astype(str)
+                    .str.strip()
+                    .unique()
+                    .tolist()
+                )
+            except Exception:
+                procs_estado = set()
+            processos = [p for p in processos if str(p).strip() in procs_estado]
+            if LOG_VERBOSE:
+                _info(f"[Métricas/Reconciliação] Processos faturados existentes no ESTADO: {len(processos)}")
             if not processos:
                 _info("[Métricas/Reconciliação] Nenhum processo elegível encontrado.")
                 return
@@ -2097,8 +2112,12 @@ class CalculoComissao:
             )
 
             resumo_list = []
-            for proc in processos:
+            total_proc = len(processos)
+            _info(f"[Métricas/Reconciliação] Processando {total_proc} processo(s) elegível(eis)")
+            for idx_proc, proc in enumerate(processos, start=1):
                 try:
+                    if LOG_VERBOSE and (idx_proc % 50 == 0 or idx_proc == 1 or idx_proc == total_proc):
+                        _info(f"[Métricas/Reconciliação] Progresso {idx_proc}/{total_proc} (proc={proc})")
                     tcmp_dict, fcmp_dict = metrics_calc.calculate_for_process(proc)
                     
                     # NOVO (DEBUG): Capturar detalhes dos itens usados no cálculo
@@ -2176,31 +2195,8 @@ class CalculoComissao:
                                 self.state_manager.estado['DETALHES_CALCULO_METRICAS'] = None
                             self.state_manager.estado.loc[idx, 'DETALHES_CALCULO_METRICAS'] = detalhes_metricas_json
                         else:
-                            # Processo não existe no estado - criar (pode acontecer se processo foi faturado mas não teve pagamentos)
-                            from models.process_state import ESTADO_COLUMNS
-                            nova_linha = {}
-                            for col in ESTADO_COLUMNS:
-                                if col == 'PROCESSO':
-                                    nova_linha[col] = proc_str
-                                elif col == 'DETALHES_CALCULO_METRICAS':
-                                    nova_linha[col] = detalhes_metricas_json
-                                elif col == 'STATUS_CALCULO_MEDIAS':
-                                    nova_linha[col] = 'REALIZADO'
-                                elif col == 'MES_ANO_FATURAMENTO':
-                                    nova_linha[col] = mes_ano
-                                elif col in ['TOTAL_ANTECIPACOES', 'TOTAL_PAGAMENTOS_REGULARES', 'TOTAL_PAGO_ACUMULADO', 
-                                            'TOTAL_ADIANTADO_COMISSAO', 'VALOR_TOTAL_PROCESSO']:
-                                    nova_linha[col] = 0.0
-                                elif col == 'STATUS_RECONCILIACAO':
-                                    nova_linha[col] = 'Nao Realizada'
-                                elif col == 'ULTIMA_ATUALIZACAO':
-                                    nova_linha[col] = datetime.now().isoformat()
-                                else:
-                                    nova_linha[col] = None
-                            self.state_manager.estado = pd.concat(
-                                [self.state_manager.estado, pd.DataFrame([nova_linha])],
-                                ignore_index=True
-                            )
+                            if LOG_VERBOSE:
+                                _info(f"[Métricas/Reconciliação] (DEBUG) Processo {proc_str} fora do ESTADO; detalhes de métricas não salvos.")
                     except Exception as e:
                         if hasattr(self, "_logger"):
                             self._logger.warning(f"Falha ao salvar detalhes de métricas para processo {proc}: {e}")
@@ -2280,33 +2276,10 @@ class CalculoComissao:
                                 # Garantir que a coluna existe
                                 if 'DETALHES_CALCULO_RECONCILIACAO' not in self.state_manager.estado.columns:
                                     self.state_manager.estado['DETALHES_CALCULO_RECONCILIACAO'] = None
-                                self.state_manager.estado.loc[idx[0], 'DETALHES_CALCULO_RECONCILIACAO'] = detalhes_reconciliacao_json
+                                self.state_manager.estado.loc[idx, 'DETALHES_CALCULO_RECONCILIACAO'] = detalhes_reconciliacao_json
                             else:
-                                # Processo não existe no estado - criar (não deveria acontecer, mas vamos garantir)
-                                from models.process_state import ESTADO_COLUMNS
-                                nova_linha = {}
-                                for col in ESTADO_COLUMNS:
-                                    if col == 'PROCESSO':
-                                        nova_linha[col] = proc_str
-                                    elif col == 'DETALHES_CALCULO_RECONCILIACAO':
-                                        nova_linha[col] = detalhes_reconciliacao_json
-                                    elif col == 'TOTAL_ADIANTADO_COMISSAO':
-                                        nova_linha[col] = total_adiantado
-                                    elif col in ['TOTAL_ANTECIPACOES', 'TOTAL_PAGAMENTOS_REGULARES', 'TOTAL_PAGO_ACUMULADO', 
-                                                'VALOR_TOTAL_PROCESSO']:
-                                        nova_linha[col] = 0.0
-                                    elif col == 'STATUS_RECONCILIACAO':
-                                        nova_linha[col] = 'Realizada'
-                                    elif col == 'STATUS_CALCULO_MEDIAS':
-                                        nova_linha[col] = 'REALIZADO'
-                                    elif col == 'ULTIMA_ATUALIZACAO':
-                                        nova_linha[col] = datetime.now().isoformat()
-                                    else:
-                                        nova_linha[col] = None
-                                self.state_manager.estado = pd.concat(
-                                    [self.state_manager.estado, pd.DataFrame([nova_linha])],
-                                    ignore_index=True
-                                )
+                                if LOG_VERBOSE:
+                                    _info(f"[Métricas/Reconciliação] (DEBUG) Processo {proc_str} fora do ESTADO; detalhes de reconciliação não salvos.")
                         except Exception as e:
                             if hasattr(self, "_logger"):
                                 self._logger.warning(f"Falha ao salvar detalhes de reconciliação para processo {proc}: {e}")
@@ -2350,29 +2323,8 @@ class CalculoComissao:
                                 logs_eventos_str = f"{logs_existentes}\n{logs_eventos_str}"
                             self.state_manager.estado.loc[idx, 'LOG_EVENTOS'] = logs_eventos_str
                         else:
-                            # Processo não existe no estado - criar (pode acontecer se processo foi faturado mas não teve pagamentos)
-                            from models.process_state import ESTADO_COLUMNS
-                            nova_linha = {}
-                            for col in ESTADO_COLUMNS:
-                                if col == 'PROCESSO':
-                                    nova_linha[col] = proc_str
-                                elif col == 'LOG_EVENTOS':
-                                    nova_linha[col] = logs_eventos_str
-                                elif col == 'STATUS_CALCULO_MEDIAS':
-                                    nova_linha[col] = 'REALIZADO'
-                                elif col in ['TOTAL_ANTECIPACOES', 'TOTAL_PAGAMENTOS_REGULARES', 'TOTAL_PAGO_ACUMULADO', 
-                                            'TOTAL_ADIANTADO_COMISSAO', 'VALOR_TOTAL_PROCESSO']:
-                                    nova_linha[col] = 0.0
-                                elif col == 'STATUS_RECONCILIACAO':
-                                    nova_linha[col] = 'Nao Realizada'
-                                elif col == 'ULTIMA_ATUALIZACAO':
-                                    nova_linha[col] = datetime.now().isoformat()
-                                else:
-                                    nova_linha[col] = None
-                            self.state_manager.estado = pd.concat(
-                                [self.state_manager.estado, pd.DataFrame([nova_linha])],
-                                ignore_index=True
-                            )
+                            if LOG_VERBOSE:
+                                _info(f"[Métricas/Reconciliação] (DEBUG) Processo {proc_str} fora do ESTADO; LOG_EVENTOS não salvo.")
                 except Exception as e:
                     if hasattr(self, "_logger"):
                         self._logger.warning(f"Falha ao salvar logs de eventos para processo {proc}: {e}")
@@ -2381,6 +2333,7 @@ class CalculoComissao:
 
             # Disponibilizar para a aba RECONCILIACAO (resumo)
             self.reconciliacao_resumo_list = resumo_list
+            _info(f"[Métricas/Reconciliação] Finalizado: {len(resumo_list)} processo(s) com resumo de reconciliação")
         except Exception as e:
             self._log_validacao(
                 "ERRO", f"Erro em métricas/reconciliação do mês: {e}", {}
@@ -2394,6 +2347,7 @@ class CalculoComissao:
         - Pagamentos regulares: comissão = valor * TCMP * FCMP (métricas salvas no estado)
         """
         try:
+            _info("[Recebimentos] Início do cálculo de comissões por recebimento (nova lógica)")
             loader = FinancialPaymentsLoader()
             path_fin = os.path.join(self.base_path, "Análise Financeira.xlsx")
             pagamentos = loader.load_from_file(path_fin)
@@ -2403,7 +2357,12 @@ class CalculoComissao:
             
             if pagamentos.empty:
                 self.comissoes_recebimento_df = pd.DataFrame()
+                _info("[Recebimentos] Nenhum pagamento encontrado em Análise Financeira.xlsx")
                 return
+
+            total_rows = len(pagamentos)
+            if LOG_VERBOSE:
+                _info(f"[Recebimentos] Pagamentos carregados: {total_rows} linha(s)")
 
             df_anal = self.data.get("ANALISE_COMERCIAL_COMPLETA", pd.DataFrame())
             colaboradores_df = self.data.get("COLABORADORES", pd.DataFrame())
@@ -2448,6 +2407,14 @@ class CalculoComissao:
             # NOVO (DEBUG): Salvar fonte de pagamentos no estado
             fonte_pagamentos = "Análise Financeira.xlsx"
 
+            # Contadores de progresso
+            cont_adiant = 0
+            cont_reg = 0
+            cont_sem_processo = 0
+            cont_mapeados_nf = 0
+            cont_nao_mapeados_nf = 0
+            inicio_ts = pd.Timestamp.now()
+            _info("[Recebimentos] Iniciando iteração sobre pagamentos...")
             for _, row in pagamentos.iterrows():
                 tipo = row.get("TIPO_PAGAMENTO")
                 valor = float(row.get("VALOR_PAGO", 0.0) or 0.0)
@@ -2461,8 +2428,10 @@ class CalculoComissao:
                 id_cliente = str(row.get("ID_CLIENTE") or "")
 
                 if tipo == "Antecipação":
+                    cont_adiant += 1
                     processo = str(row.get("PROCESSO") or "").strip()
                     if not processo:
+                        cont_sem_processo += 1
                         continue
                     
                     # NOVO (DEBUG): Logar pagamento de antecipação
@@ -2529,11 +2498,16 @@ class CalculoComissao:
                                 candidatos = df_anal[mask]
                                 if not candidatos.empty:
                                     processo = str(candidatos.iloc[0][proc_col]).strip()
+                                    cont_mapeados_nf += 1
+                                else:
+                                    cont_nao_mapeados_nf += 1
                             except Exception:
                                 processo = None
                     if not processo:
+                        cont_sem_processo += 1
                         continue
                     
+                    cont_reg += 1
                     # NOVO (DEBUG): Logar pagamento regular
                     self._adicionar_log_evento(
                         processo,
@@ -2597,6 +2571,12 @@ class CalculoComissao:
                     # Atualizar estado (valor pago regular)
                     self.state_manager.update_payment_regular(processo, valor)
 
+                # Heartbeat periódico por volume (a cada 200 linhas)
+                if LOG_VERBOSE and ((cont_adiant + cont_reg) % 200 == 0):
+                    decorrido = (pd.Timestamp.now() - inicio_ts).total_seconds()
+                    _info(f"[Recebimentos] Progresso: {cont_adiant + cont_reg}/{total_rows} processados "
+                          f"(adiant={cont_adiant}, reg={cont_reg}, sem_proc={cont_sem_processo}) em {decorrido:.1f}s")
+
             # NOVO (DEBUG): Salvar logs e pagamentos processados no estado
             # Isso será refatorado na Etapa 2.2 com método dedicado
             processos_com_pagamentos = set(self.pagamentos_processados_por_processo.keys())
@@ -2643,33 +2623,8 @@ class CalculoComissao:
                         if LOG_VERBOSE:
                             _info(f"[DEBUG] Estado atualizado para processo {processo_str}: FONTE={fonte_pagamentos}, PAGAMENTOS={len(self.pagamentos_processados_por_processo[processo])}, LOGS={len(logs_eventos)}")
                     else:
-                        # Processo não existe no estado - criar (isso não deveria acontecer, mas vamos garantir)
-                        from models.process_state import ESTADO_COLUMNS
-                        nova_linha = {}
-                        for col in ESTADO_COLUMNS:
-                            if col == 'PROCESSO':
-                                nova_linha[col] = processo_str
-                            elif col == 'FONTE_PAGAMENTOS':
-                                nova_linha[col] = fonte_pagamentos
-                            elif col == 'PAGAMENTOS_PROCESSADOS':
-                                nova_linha[col] = pagamentos_json
-                            elif col == 'LOG_EVENTOS':
-                                nova_linha[col] = logs_eventos_str
-                            elif col in ['TOTAL_ANTECIPACOES', 'TOTAL_PAGAMENTOS_REGULARES', 'TOTAL_PAGO_ACUMULADO', 
-                                        'TOTAL_ADIANTADO_COMISSAO', 'VALOR_TOTAL_PROCESSO']:
-                                nova_linha[col] = 0.0
-                            elif col == 'STATUS_RECONCILIACAO':
-                                nova_linha[col] = 'Nao Realizada'
-                            elif col == 'STATUS_CALCULO_MEDIAS':
-                                nova_linha[col] = 'PENDENTE'
-                            elif col == 'ULTIMA_ATUALIZACAO':
-                                nova_linha[col] = datetime.now().isoformat()
-                            else:
-                                nova_linha[col] = None
-                        self.state_manager.estado = pd.concat(
-                            [self.state_manager.estado, pd.DataFrame([nova_linha])],
-                            ignore_index=True
-                        )
+                        if LOG_VERBOSE:
+                            _info(f"[Recebimentos] (DEBUG) Processo {processo_str} fora do ESTADO; debug de pagamentos não salvo.")
                 except Exception as e:
                     # Não quebrar o cálculo se o log falhar
                     if hasattr(self, "_logger"):
@@ -2682,6 +2637,14 @@ class CalculoComissao:
             )
             # Manter snapshot do estado
             self.estado = self.state_manager.estado
+            # Resumo final da fase
+            total_proc_calc = cont_adiant + cont_reg
+            fim_ts = pd.Timestamp.now()
+            decorrido_total = (fim_ts - inicio_ts).total_seconds() if 'inicio_ts' in locals() else None
+            _info(f"[Recebimentos] Finalizado: processados {total_proc_calc}/{total_rows} pagamentos "
+                  f"(adiant={cont_adiant}, reg={cont_reg}, sem_proc={cont_sem_processo}, "
+                  f"mapeadosNF={cont_mapeados_nf}, naoMapeadosNF={cont_nao_mapeados_nf})"
+                  + (f" em {decorrido_total:.1f}s" if decorrido_total is not None else ""))
         except Exception as e:
             self._log_validacao(
                 "ERRO",
